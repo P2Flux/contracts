@@ -26,12 +26,36 @@ export type RecurringAuthorization = {
   maxGasReimbursement: bigint
 }
 
+/** P2Flux profit only. Never funds gas - that is NETWORK_FEE plus the reimbursement. */
 export const RECURRING_FEE_BPS = 200n
 
 /** Mirrors `GAS_REIMBURSEMENT_HARD_CAP` in the contract (6-decimal token units). */
 export const GAS_REIMBURSEMENT_HARD_CAP = usdc('0.05')
 
+/**
+ * Mirrors `NETWORK_FEE`: a flat per-charge network/infrastructure fee, deducted from the signed
+ * amount alongside the profit fee. The merchant funds it out of proceeds; the customer's debit is
+ * unaffected. It goes to the gas treasury, never to the profit wallet.
+ */
+export const RECURRING_NETWORK_FEE = usdc('0.10')
+
 export const recurringFee = (amount: bigint) => (amount * RECURRING_FEE_BPS) / 10_000n
+
+/** What the merchant actually receives: the commercial amount less both fees. */
+export const recurringNet = (amount: bigint) => amount - recurringFee(amount) - RECURRING_NETWORK_FEE
+
+/**
+ * The smallest amount that still leaves the merchant something.
+ *
+ * The contract refuses `amount <= fee + NETWORK_FEE`, so this searches up from the fee floor rather
+ * than hardcoding a figure that could drift when a fee constant changes. The answer is a handful of
+ * units away, so the loop is trivial.
+ */
+export const minRecurringAmount = () => {
+  let amount = RECURRING_NETWORK_FEE
+  while (recurringNet(amount) < 1n) amount++
+  return amount
+}
 
 /** 128 random bits: two subscriptions with identical terms stay distinguishable and independent. */
 export const randomSalt = () => BigInt(`0x${Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString('hex')}`)
@@ -158,6 +182,9 @@ export const recurringAbi = [
     outputs: [{ type: 'uint256' }],
   },
   { type: 'function', name: 'FEE_BPS', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint16' }] },
+  { type: 'function', name: 'NETWORK_FEE', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
+  { type: 'function', name: 'gasTreasury', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] },
+  { type: 'function', name: 'supportedToken', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] },
   {
     type: 'event',
     name: 'SubscriptionCharged',
@@ -168,6 +195,7 @@ export const recurringAbi = [
       { name: 'periodIndex', type: 'uint256' },
       { name: 'net', type: 'uint256' },
       { name: 'fee', type: 'uint256' },
+      { name: 'networkFee', type: 'uint256' },
       { name: 'gasReimbursement', type: 'uint256' },
     ],
   },
@@ -193,6 +221,8 @@ export const recurringAbi = [
   { type: 'error', name: 'InvalidSignature', inputs: [] },
   { type: 'error', name: 'AlreadyChargedThisPeriod', inputs: [] },
   { type: 'error', name: 'GasReimbursementTooHigh', inputs: [] },
+  { type: 'error', name: 'TokenNotSupported', inputs: [] },
+  { type: 'error', name: 'AmountTooSmall', inputs: [] },
 ] as const
 
 /** Wire form for the p2s2 capability payload and API responses (bigint-free). */

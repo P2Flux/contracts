@@ -35,6 +35,7 @@ export const KEYS = {
   seller: '0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6',
   attacker: '0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a',
   feeWallet: '0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba',
+  gasTreasury: '0x92db14e403b83dfe3df233f83dfa3a0d7096f21ca9b0d6d6b8d88b2b4ec1564e',
 } as const
 
 export type Harness = Awaited<ReturnType<typeof startHarness>>
@@ -76,14 +77,21 @@ export async function startHarness() {
   }
 
   const feeWallet = privateKeyToAccount(KEYS.feeWallet).address.toLowerCase() as Address
+  const gasTreasury = privateKeyToAccount(KEYS.gasTreasury).address.toLowerCase() as Address
   const seller = privateKeyToAccount(KEYS.seller).address.toLowerCase() as Address
 
-  const recurring = await deploy('P2FluxRecurring', [
-    admin.account.address,
-    relayer.account.address,
-    feeWallet,
-  ])
+  /**
+   * A recurring contract bound to one token. Most tests want the shared instance below, but the
+   * token is immutable and enforced in `charge`, so anything that must be charged in a *different*
+   * token - the reentrancy and false-return attacks, which need the malicious token to be the one
+   * being transferred - deploys its own instance bound to that token.
+   */
+  const deployRecurring = (supportedToken: Address, relayerAddress: Address = relayer.account.address) =>
+    deploy('P2FluxRecurring', [admin.account.address, relayerAddress, feeWallet, gasTreasury, supportedToken])
+
+  // The token first now: the contract is bound to it at construction.
   const token = await deploy('MockUSDC')
+  const recurring = await deployRecurring(token)
 
   const chainId = await chain.getChainId()
 
@@ -94,6 +102,7 @@ export async function startHarness() {
     recurring,
     token,
     feeWallet,
+    gasTreasury,
     seller,
     admin,
     relayer,
@@ -101,6 +110,7 @@ export async function startHarness() {
     attacker,
     wallet,
     deploy,
+    deployRecurring,
 
     async mint(to: Address, amount: bigint, tokenAddress: Address = token) {
       const hash = await admin.writeContract({
@@ -112,12 +122,17 @@ export async function startHarness() {
       await chain.waitForTransactionReceipt({ hash })
     },
 
-    async approve(owner: ReturnType<typeof wallet>, amount: bigint = maxUint256, tokenAddress: Address = token) {
+    async approve(
+      owner: ReturnType<typeof wallet>,
+      amount: bigint = maxUint256,
+      tokenAddress: Address = token,
+      spender: Address = recurring,
+    ) {
       const hash = await owner.writeContract({
         address: tokenAddress,
         abi: artifact('MockUSDC').abi,
         functionName: 'approve',
-        args: [recurring, amount],
+        args: [spender, amount],
       })
       await chain.waitForTransactionReceipt({ hash })
     },
@@ -148,11 +163,11 @@ export async function startHarness() {
     async charge(
       auth: RecurringAuthorization,
       signature: Hex,
-      opts: { from?: ReturnType<typeof wallet>; gasReimbursement?: bigint } = {},
+      opts: { from?: ReturnType<typeof wallet>; gasReimbursement?: bigint; at?: Address } = {},
     ) {
       const from = opts.from ?? relayer
       const hash = await from.writeContract({
-        address: recurring,
+        address: opts.at ?? recurring,
         abi: recurringAbi,
         functionName: 'charge',
         args: [abiAuth(auth), signature, opts.gasReimbursement ?? 0n],
@@ -172,12 +187,12 @@ export async function startHarness() {
       throw new Error('expected revert, call succeeded')
     },
 
-    async read<T>(functionName: string, args: unknown[] = []): Promise<T> {
+    async read<T>(functionName: string, args: unknown[] = [], at: Address = recurring): Promise<T> {
       const mapped = args.map((a) =>
         a && typeof a === 'object' && 'salt' in (a as object) ? abiAuth(a as RecurringAuthorization) : a,
       )
       return (await chain.readContract({
-        address: recurring,
+        address: at,
         abi: recurringAbi,
         functionName,
         args: mapped,

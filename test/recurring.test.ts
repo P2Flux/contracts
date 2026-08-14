@@ -17,6 +17,7 @@ import {
   abiAuth,
   recurringAbi,
   recurringFee,
+  recurringNet,
   recurringSubscriptionId,
   recurringTypedData,
 } from '../../packages/base/src/recurring.js'
@@ -68,7 +69,11 @@ t('a valid EOA signature charges; every tampered field is rejected', async () =>
     const changed = { ...auth, ...over }
     if (label === 'end -> indefinite') changed.end = 999_999_999_999 % 2 ** 40 // some different end
     const error = await h.expectRevert(h.charge(changed, signature))
-    assert.equal(error, 'InvalidSignature', `${label}: ${error}`)
+    // Swapping the token is refused before the signature is even recovered: comparing one address
+    // is cheap and ecrecover is not, so that check comes first. Every other tampered field gets as
+    // far as signature verification and dies there. Both are refusals; only the reason differs.
+    const expected = label === 'token' ? 'TokenNotSupported' : 'InvalidSignature'
+    assert.equal(error, expected, `${label}: ${error}`)
   }
 
   // The untampered original still works.
@@ -83,11 +88,7 @@ t('wrong signer is rejected even with correct terms', async () => {
 })
 
 t('a signature is unusable against another deployment (verifyingContract binding)', async () => {
-  const other = await h.deploy('P2FluxRecurring', [
-    h.admin.account.address,
-    h.relayer.account.address,
-    h.feeWallet,
-  ])
+  const other = await h.deployRecurring(h.token)
   const auth = await baseAuth(h)
   const signature = await h.sign(auth) // signed for h.recurring
 
@@ -332,27 +333,110 @@ t('only the payer can revoke; revocation is permanent and per-subscription', asy
 
 // --- fees -----------------------------------------------------------------------
 
-t('exactly 2% fee: seller 98%, feeWallet 2%, and rounding favours the seller', async () => {
-  for (const amount of [10_000_000n, 999_999n, 33n, 1n]) {
-    const auth = await baseAuth(h, { amount, period: 3600 })
-    const signature = await h.sign(auth)
-
-    const sellerBefore = await h.balance(h.seller)
-    const feeBefore = await h.balance(h.feeWallet)
-    const payerBefore = await h.balance(auth.payer)
-
-    await h.charge(auth, signature)
-
-    const fee = recurringFee(amount)
-    assert.equal(await h.balance(h.seller) - sellerBefore, amount - fee, `net for ${amount}`)
-    assert.equal(await h.balance(h.feeWallet) - feeBefore, fee, `fee for ${amount}`)
-    assert.equal(payerBefore - (await h.balance(auth.payer)), amount, `debit for ${amount}`)
+/** Every balance a charge can touch, so a test can assert the whole picture at once. */
+async function ledger(payer: Address) {
+  return {
+    payer: await h.balance(payer),
+    seller: await h.balance(h.seller),
+    profit: await h.balance(h.feeWallet),
+    treasury: await h.balance(h.gasTreasury),
+    relayer: await h.balance(h.relayer.account.address),
   }
+}
+
+type Ledger = Awaited<ReturnType<typeof ledger>>
+const delta = (before: Ledger, after: Ledger): Ledger => ({
+  payer: after.payer - before.payer,
+  seller: after.seller - before.seller,
+  profit: after.profit - before.profit,
+  treasury: after.treasury - before.treasury,
+  relayer: after.relayer - before.relayer,
+})
+
+t('the worked example: 10.00 with 0.03 gas splits exactly and reconciles', async () => {
+  const auth = await baseAuth(h, { amount: 10_000_000n, period: 3600 })
+  const signature = await h.sign(auth)
+
+  const before = await ledger(auth.payer)
+  await h.charge(auth, signature, { gasReimbursement: 30_000n })
+  const moved = delta(before, await ledger(auth.payer))
+
+  assert.equal(moved.payer, -10_030_000n, 'customer pays the price plus gas, nothing else')
+  assert.equal(moved.seller, 9_700_000n, 'merchant: 10.00 less 2% profit less the 0.10 network fee')
+  assert.equal(moved.profit, 200_000n, 'profit wallet: exactly 2%, never any gas')
+  assert.equal(moved.treasury, 130_000n, 'gas treasury: the 0.10 network fee plus the 0.03 gas')
+  assert.equal(moved.relayer, 0n, 'the hot relayer accumulates nothing')
+
+  // Nothing appears or disappears: what left the payer arrived somewhere.
+  assert.equal(moved.seller + moved.profit + moved.treasury, -moved.payer)
+  // And the commercial amount alone is what the three parties divide.
+  assert.equal(moved.seller + moved.profit + (moved.treasury - 30_000n), auth.amount)
+})
+
+t('a 1.00 subscription: the fixed fee bites, the percentage does not change', async () => {
+  const auth = await baseAuth(h, { amount: 1_000_000n, period: 3600 })
+  const signature = await h.sign(auth)
+
+  const before = await ledger(auth.payer)
+  await h.charge(auth, signature, { gasReimbursement: 30_000n })
+  const moved = delta(before, await ledger(auth.payer))
+
+  assert.equal(moved.payer, -1_030_000n)
+  assert.equal(moved.seller, 880_000n, '1.00 less 0.02 profit less 0.10 network')
+  assert.equal(moved.profit, 20_000n, 'still exactly 2% - the fixed fee is not profit')
+  assert.equal(moved.treasury, 130_000n)
+  assert.equal(moved.seller + moved.profit + moved.treasury, -moved.payer)
+})
+
+t('rounding on the profit fee favours the merchant', async () => {
+  // 2% of 149999 is 2999.98; the merchant keeps the fraction.
+  const auth = await baseAuth(h, { amount: 149_999n, period: 3600 })
+
+  const before = await ledger(auth.payer)
+  await h.charge(auth, await h.sign(auth))
+  const moved = delta(before, await ledger(auth.payer))
+
+  assert.equal(moved.profit, 2_999n, 'truncated down')
+  assert.equal(moved.seller, 149_999n - 2_999n - 100_000n)
+  assert.equal(moved.treasury, 100_000n, 'the network fee alone when no gas is claimed')
+})
+
+t('an amount too small to leave the merchant anything is refused', async () => {
+  // The floor: amount - floor(amount/50) - 100000 must be at least one base unit.
+  for (const amount of [1n, 33n, 100_000n, 102_040n]) {
+    const auth = await baseAuth(h, { amount, period: 3600 })
+    assert.equal(
+      await h.expectRevert(h.charge(auth, await h.sign(auth))),
+      'AmountTooSmall',
+      `${amount} leaves the merchant nothing`,
+    )
+  }
+
+  // One unit more, and the merchant keeps exactly one unit.
+  const auth = await baseAuth(h, { amount: 102_041n, period: 3600 })
+  const before = await ledger(auth.payer)
+  assert.equal((await h.charge(auth, await h.sign(auth))).status, 'success')
+  const moved = delta(before, await ledger(auth.payer))
+  assert.equal(moved.seller, 1n, 'the smallest chargeable subscription')
+  assert.equal(moved.profit, 2_040n)
+  assert.equal(moved.treasury, 100_000n)
 })
 
 t('zero amount is rejected outright', async () => {
   const auth = await baseAuth(h, { amount: 0n })
   assert.equal(await h.expectRevert(h.charge(auth, await h.sign(auth))), 'ZeroAmount')
+})
+
+t('only the deployment token can be charged', async () => {
+  // A second, perfectly ordinary ERC-20. The fee constants are quantities of a 6-decimal token, so
+  // an arbitrary token must never reach the fee math - the contract enforces that, not policy.
+  const other = await h.deploy('MockUSDC')
+  await h.mint(h.payer.account.address, 1_000_000_000n, other)
+  await h.approve(h.payer, maxUint256, other)
+
+  const auth = await baseAuth(h, { token: other, period: 3600 })
+  assert.equal(await h.expectRevert(h.charge(auth, await h.sign(auth))), 'TokenNotSupported')
+  assert.equal((await h.read<Address>('supportedToken')).toLowerCase(), h.token.toLowerCase())
 })
 
 // --- gas reimbursement -----------------------------------------------------------
@@ -361,13 +445,13 @@ t('relayer reimbursement works within both caps; buyer debit is exactly bounded'
   const auth = await baseAuth(h, { period: 3600, maxGasReimbursement: 30_000n })
   const signature = await h.sign(auth)
 
-  const relayerBefore = await h.balance(h.relayer.account.address)
-  const payerBefore = await h.balance(auth.payer)
-
+  const before = await ledger(auth.payer)
   await h.charge(auth, signature, { gasReimbursement: 2_000n })
+  const moved = delta(before, await ledger(auth.payer))
 
-  assert.equal(await h.balance(h.relayer.account.address) - relayerBefore, 2_000n)
-  assert.equal(payerBefore - (await h.balance(auth.payer)), auth.amount + 2_000n, 'amount + gas, nothing else')
+  assert.equal(moved.treasury, 100_000n + 2_000n, 'the reimbursement joins the network fee')
+  assert.equal(moved.relayer, 0n, 'and never reaches the key that signs transactions')
+  assert.equal(moved.payer, -(auth.amount + 2_000n), 'amount + gas, nothing else')
 })
 
 t('reimbursement above the SIGNED cap reverts', async () => {
@@ -396,15 +480,17 @@ t('a NON-relayer caller gets zero reimbursement no matter what it passes', async
   const signature = await h.sign(auth)
 
   const attackerBefore = await h.balance(h.attacker.account.address)
-  const payerBefore = await h.balance(auth.payer)
+  const before = await ledger(auth.payer)
 
   // Attacker asks for the full signed cap. Charge succeeds - execution is public - but the
   // reimbursement is forced to zero, so the attacker pays gas for the privilege of paying the seller.
   const receipt = await h.charge(auth, signature, { from: h.attacker, gasReimbursement: 50_000n })
   assert.equal(receipt.status, 'success')
+  const moved = delta(before, await ledger(auth.payer))
 
   assert.equal(await h.balance(h.attacker.account.address) - attackerBefore, 0n, 'attacker extracted nothing')
-  assert.equal(payerBefore - (await h.balance(auth.payer)), auth.amount, 'payer debited the amount only')
+  assert.equal(moved.payer, -auth.amount, 'payer debited the amount only')
+  assert.equal(moved.treasury, 100_000n, 'the network fee is owed on any successful charge')
 })
 
 // --- front-running ---------------------------------------------------------------
@@ -417,7 +503,7 @@ t('a public signature enables exactly the signed payment, nothing else', async (
   await h.charge(auth, signature, { from: h.attacker })
 
   // Funds went to the buyer-signed recipient regardless of who called.
-  assert.equal(await h.balance(h.seller) - sellerBefore, auth.amount - recurringFee(auth.amount))
+  assert.equal(await h.balance(h.seller) - sellerBefore, recurringNet(auth.amount))
 
   // And a modified payment with the same signature is impossible (covered field-by-field above);
   // spot-check the most valuable redirect:
@@ -448,46 +534,50 @@ t('two racing identical charges: exactly one lands', async () => {
 
 t('reentrancy through a malicious token is stopped', async () => {
   const evil = await h.deploy('ReentrantToken')
+  // The token under test has to be the one being transferred, and a deployment only charges its own
+  // token - so this attack gets an instance bound to the malicious token.
+  const target = await h.deployRecurring(evil)
   await h.mint(h.payer.account.address, 100_000_000n, evil)
-  await h.approve(h.payer, maxUint256, evil)
+  await h.approve(h.payer, maxUint256, evil, target)
 
   const auth = await baseAuth(h, { token: evil, period: 3600 })
-  const signature = await h.sign(auth)
+  const signature = await h.sign(auth, h.payer, target)
 
   const evilAbi = JSON.parse(readFileSync(new URL('../../out/ReentrantToken.json', import.meta.url), 'utf8')).abi
   const arm = await h.admin.writeContract({
     address: evil,
     abi: evilAbi,
     functionName: 'arm',
-    args: [h.recurring, abiAuth(auth), signature],
+    args: [target, abiAuth(auth), signature],
   })
   await h.chain.waitForTransactionReceipt({ hash: arm })
 
   // The inner re-entrant charge reverts on the guard, which reverts the whole outer charge.
-  assert.equal(await h.expectRevert(h.charge(auth, signature)), 'reverted')
-  const id = await h.read<Hex>('subscriptionId', [auth])
-  assert.equal(await h.read<bigint>('lastChargedPeriodPlusOne', [id]), 0n, 'state fully rolled back')
+  assert.equal(await h.expectRevert(h.charge(auth, signature, { at: target })), 'reverted')
+  const id = await h.read<Hex>('subscriptionId', [auth], target)
+  assert.equal(await h.read<bigint>('lastChargedPeriodPlusOne', [id], target), 0n, 'state fully rolled back')
 })
 
 t('a false-returning token is treated as failure by SafeERC20, with rollback', async () => {
   const falsy = await h.deploy('FalseReturnToken')
+  const target = await h.deployRecurring(falsy)
   await h.mint(h.payer.account.address, 100_000_000n, falsy)
-  await h.approve(h.payer, maxUint256, falsy)
+  await h.approve(h.payer, maxUint256, falsy, target)
 
   const abi = JSON.parse(readFileSync(new URL('../../out/FalseReturnToken.json', import.meta.url), 'utf8')).abi
   const set = await h.admin.writeContract({ address: falsy, abi, functionName: 'setFailTransfers', args: [true] })
   await h.chain.waitForTransactionReceipt({ hash: set })
 
   const auth = await baseAuth(h, { token: falsy, period: 3600 })
-  const signature = await h.sign(auth)
-  assert.equal(await h.expectRevert(h.charge(auth, signature)), 'reverted')
+  const signature = await h.sign(auth, h.payer, target)
+  assert.equal(await h.expectRevert(h.charge(auth, signature, { at: target })), 'reverted')
 
-  const id = await h.read<Hex>('subscriptionId', [auth])
-  assert.equal(await h.read<bigint>('lastChargedPeriodPlusOne', [id]), 0n)
+  const id = await h.read<Hex>('subscriptionId', [auth], target)
+  assert.equal(await h.read<bigint>('lastChargedPeriodPlusOne', [id], target), 0n)
 
   const unset = await h.admin.writeContract({ address: falsy, abi, functionName: 'setFailTransfers', args: [false] })
   await h.chain.waitForTransactionReceipt({ hash: unset })
-  assert.equal((await h.charge(auth, signature)).status, 'success', 'recovers once the token behaves')
+  assert.equal((await h.charge(auth, signature, { at: target })).status, 'success', 'recovers once the token behaves')
 })
 
 // --- invariants -------------------------------------------------------------------

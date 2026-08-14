@@ -27,9 +27,9 @@ contract P2FluxRecurring is EIP712, ReentrancyGuard {
 
     /// @notice The exact recurring terms the customer signs. Nothing else is ever charged.
     /// @param payer   The customer wallet tokens are pulled from. Must be the signer.
-    /// @param recipient Seller wallet. Receives amount minus the fee.
-    /// @param token   ERC-20 being charged.
-    /// @param amount  Charged per period, before the fee split. Token base units.
+    /// @param recipient Seller wallet. Receives amount minus the profit fee and the network fee.
+    /// @param token   ERC-20 being charged. Must equal `supportedToken`.
+    /// @param amount  The commercial price, charged per period, before fees. Token base units.
     /// @param period  Billing period in seconds.
     /// @param start   First period begins here (unix seconds).
     /// @param end     0 = no expiration; otherwise charging stops at this timestamp.
@@ -51,20 +51,43 @@ contract P2FluxRecurring is EIP712, ReentrancyGuard {
         "RecurringAuthorization(address payer,address recipient,address token,uint256 amount,uint48 period,uint48 start,uint48 end,bytes32 salt,uint256 maxGasReimbursement)"
     );
 
-    /// @notice Recurring fee, deducted from the signed amount: recipient gets amount - 2%.
+    /// @notice P2Flux profit, deducted from the signed amount. Goes to `feeWallet` and nowhere else.
+    /// @dev Never funds gas. The gas side of the business is `NETWORK_FEE` plus the reimbursement,
+    ///      and both go to `gasTreasury`, so revenue and network costs stay separately accountable.
     uint16 public constant FEE_BPS = 200;
+
+    /// @notice Flat network/infrastructure fee per successful charge, also deducted from the signed
+    ///         amount: the merchant funds it out of proceeds, the customer is not debited for it.
+    /// @dev Denominated in 6-decimal USDC units, which is safe because `supportedToken` pins the
+    ///      token at deployment. Builds the reserve that absorbs USDC->ETH rebalancing spread, gas
+    ///      estimation variance and the occasional charge that reverts after a clean simulation.
+    uint256 public constant NETWORK_FEE = 0.10e6;
 
     /// @notice Protocol-level hard ceiling on the per-charge gas reimbursement, in token base units.
     /// @dev Defence in depth against a compromised relayer key combined with an API mistake that
     ///      signs an absurd `maxGasReimbursement`: whatever was signed and whatever the relayer
     ///      asks, no charge can debit more than this on top of the subscription amount.
-    ///      Denominated for 6-decimal tokens (v1 is USDC-only by API policy): 0.05 USDC,
-    ///      ~20x the worst per-charge gas cost measured on Base.
+    ///      Denominated in 6-decimal USDC units (see `supportedToken`): 0.05 USDC, ~20x the worst
+    ///      per-charge gas cost measured on Base.
     uint256 public constant GAS_REIMBURSEMENT_HARD_CAP = 0.05e6;
 
-    /// @notice Receives the fee. Immutable on purpose: no admin can redirect the fee stream, and
-    ///         a compromised admin key can never gain a path to customer funds through it.
+    /// @notice Receives P2Flux profit. Immutable on purpose: no admin can redirect the fee stream,
+    ///         and a compromised admin key can never gain a path to customer funds through it.
     address public immutable feeWallet;
+
+    /// @notice Receives the network fee and the gas reimbursement. Separate from `feeWallet` so
+    ///         revenue and network costs can be accounted apart, and separate from `relayer` so the
+    ///         hot key that signs transactions never accumulates the treasury.
+    address public immutable gasTreasury;
+
+    /// @notice The only ERC-20 this deployment charges. Immutable, and enforced in `charge`.
+    /// @dev `NETWORK_FEE` and `GAS_REIMBURSEMENT_HARD_CAP` are fixed quantities of a 6-decimal
+    ///      token. That is only meaningful if the token cannot vary, so it is pinned here rather
+    ///      than left to off-chain policy: on an 18-decimal token a 0.10e6 fee would be dust, on a
+    ///      2-decimal one it would be a thousand units. One deployment per chain, bound to that
+    ///      chain's official USDC. Multi-token support is future work and needs decimals handling,
+    ///      not a wider check here.
+    address public immutable supportedToken;
 
     /// @notice Cold key. Rotates the relayer, nothing else. Touches no funds.
     address public immutable admin;
@@ -83,6 +106,10 @@ contract P2FluxRecurring is EIP712, ReentrancyGuard {
     /// @dev subscriptionId => permanently revoked by the payer.
     mapping(bytes32 => bool) public revoked;
 
+    /// @dev Every economic component of a charge, so a receipt is self-describing:
+    ///      `net + fee + networkFee == amount`, and the payer was debited
+    ///      `amount + gasReimbursement`. Three indexed fields is the EVM maximum, so the money
+    ///      fields stay unindexed.
     event SubscriptionCharged(
         bytes32 indexed subscriptionId,
         address indexed payer,
@@ -90,6 +117,7 @@ contract P2FluxRecurring is EIP712, ReentrancyGuard {
         uint256 periodIndex,
         uint256 net,
         uint256 fee,
+        uint256 networkFee,
         uint256 gasReimbursement
     );
     event SubscriptionRevoked(bytes32 indexed subscriptionId, address indexed payer);
@@ -108,12 +136,21 @@ contract P2FluxRecurring is EIP712, ReentrancyGuard {
     error InvalidSignature();
     error AlreadyChargedThisPeriod();
     error GasReimbursementTooHigh();
+    error TokenNotSupported();
+    error AmountTooSmall();
 
-    constructor(address _admin, address _relayer, address _feeWallet) EIP712("P2FluxRecurring", "1") {
-        if (_admin == address(0) || _relayer == address(0) || _feeWallet == address(0)) revert ZeroAddress();
+    constructor(address _admin, address _relayer, address _feeWallet, address _gasTreasury, address _supportedToken)
+        EIP712("P2FluxRecurring", "1")
+    {
+        if (
+            _admin == address(0) || _relayer == address(0) || _feeWallet == address(0)
+                || _gasTreasury == address(0) || _supportedToken == address(0)
+        ) revert ZeroAddress();
         admin = _admin;
         relayer = _relayer;
         feeWallet = _feeWallet;
+        gasTreasury = _gasTreasury;
+        supportedToken = _supportedToken;
     }
 
     // --- admin (rotation only; no funds) ------------------------------------
@@ -186,6 +223,7 @@ contract P2FluxRecurring is EIP712, ReentrancyGuard {
         nonReentrant
     {
         if (auth.recipient == address(0)) revert ZeroAddress();
+        if (auth.token != supportedToken) revert TokenNotSupported();
         if (auth.amount == 0) revert ZeroAmount();
         if (auth.period == 0) revert ZeroPeriod();
         if (auth.end != 0 && auth.end <= auth.start) revert InvalidEnd();
@@ -209,19 +247,26 @@ contract P2FluxRecurring is EIP712, ReentrancyGuard {
             revert GasReimbursementTooHigh();
         }
 
+        // Both fees come out of the signed amount, so the merchant funds them and the customer is
+        // debited `amount + reimbursement` and nothing more. Rounding on the profit fee favours the
+        // merchant. The seller must be left with something: an amount that cannot cover both fees
+        // is refused outright rather than silently paying the merchant zero.
+        uint256 fee = (auth.amount * FEE_BPS) / 10_000;
+        if (auth.amount <= fee + NETWORK_FEE) revert AmountTooSmall();
+        uint256 net = auth.amount - fee - NETWORK_FEE;
+
         // Effects before interactions. A revert below unwinds this write.
         lastChargedPeriodPlusOne[id] = periodIndex + 1;
 
-        uint256 fee = (auth.amount * FEE_BPS) / 10_000;
-        uint256 net = auth.amount - fee;
-
-        // Straight from payer to each destination: this contract never holds the funds.
+        // Straight from payer to each destination: this contract never holds the funds. The network
+        // fee and the reimbursement travel together - same destination, so one transfer rather than
+        // two identical ones.
         IERC20 token = IERC20(auth.token);
         token.safeTransferFrom(auth.payer, auth.recipient, net);
         if (fee > 0) token.safeTransferFrom(auth.payer, feeWallet, fee);
-        if (reimbursement > 0) token.safeTransferFrom(auth.payer, msg.sender, reimbursement);
+        token.safeTransferFrom(auth.payer, gasTreasury, NETWORK_FEE + reimbursement);
 
-        emit SubscriptionCharged(id, auth.payer, auth.recipient, periodIndex, net, fee, reimbursement);
+        emit SubscriptionCharged(id, auth.payer, auth.recipient, periodIndex, net, fee, NETWORK_FEE, reimbursement);
     }
 
     // --- revocation ---------------------------------------------------------
