@@ -37,6 +37,9 @@ export const erc20Abi = [
     outputs: [{ type: 'uint256' }],
   },
   { type: 'function', name: 'name', stateMutability: 'view', inputs: [], outputs: [{ type: 'string' }] },
+  /* Asserted at startup: six decimals is baked into every amount this API parses, formats and signs,
+   * so a token with any other precision mis-prices by orders of magnitude rather than a little. */
+  { type: 'function', name: 'decimals', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint8' }] },
   { type: 'function', name: 'version', stateMutability: 'view', inputs: [], outputs: [{ type: 'string' }] },
   {
     type: 'function',
