@@ -1,125 +1,80 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-/// @notice Minimal subset of the SpendPermissionManager interface.
-/// @dev Full source: https://github.com/coinbase/spend-permissions
-struct SpendPermission {
-    address account;
-    address spender;
-    address token;
-    uint160 allowance;
-    uint48 period;
-    uint48 start;
-    uint48 end;
-    uint256 salt;
-    bytes extraData;
-}
-
-struct PeriodSpend {
-    uint48 start;
-    uint48 end;
-    uint160 spend;
-}
-
-interface ISpendPermissionManager {
-    function spend(SpendPermission memory permission, uint160 value) external;
-    function getCurrentPeriod(SpendPermission memory permission) external view returns (PeriodSpend memory);
-    function getHash(SpendPermission memory permission) external view returns (bytes32);
-    function isValid(SpendPermission memory permission) external view returns (bool);
-}
-
 interface IERC20 {
-    function transfer(address to, uint256 value) external returns (bool);
     function transferFrom(address from, address to, uint256 value) external returns (bool);
-    function balanceOf(address account) external view returns (uint256);
     function permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s)
         external;
 }
 
 /// @title P2FluxSplitter
-/// @notice Splits a USDC payment between a recipient and the P2Flux fee wallet in a single transaction.
-/// @dev Holds no balance between calls. No withdrawals, no custody, no upgrade path.
-///      For recurring charges this contract is the `spender` of the buyer's Spend Permission, because
-///      SpendPermissionManager.spend() can only pay the spender - splitting requires a contract there.
+/// @notice Splits a one-time USDC payment between a recipient and the P2Flux fee wallet, in a single
+///         transaction, funded by the buyer's own allowance. The buyer pays their own gas.
+///
+/// @dev Holds no balance between calls. No withdrawals, no custody, no upgrade path, and - since V1 -
+///      no privileged role of any kind: there is no admin, no relayer, and nothing mutable except the
+///      record of which intents have settled. The only function that moves value is `pay`, and it can
+///      only ever move the buyer's own tokens to the recipient and the fee wallet.
+///
+///      One deployment per chain, bound at construction to that chain's official USDC.
 contract P2FluxSplitter {
-    ISpendPermissionManager public constant MANAGER =
-        ISpendPermissionManager(0xf85210B21cC50302F477BA56686d2019dC9b67Ad);
-
-    uint16 public constant ONE_TIME_BPS = 100; // 1%
-    uint16 public constant RECURRING_BPS = 200; // 2%
-
-    /// @notice Upper bound on the USDC the relayer may reimburse itself per charge (6 decimals).
-    uint256 public constant MAX_GAS_FEE = 0.05e6;
+    /// @notice P2Flux's share of a one-time payment, in basis points. 1%.
+    uint16 public constant ONE_TIME_BPS = 100;
 
     /// @notice Domain separator for one-time payment ids.
     bytes32 public constant PAYMENT_DOMAIN = keccak256("P2FLUX_PAYMENT_V1");
 
+    /// @notice The only ERC-20 this deployment settles. Immutable, and enforced in `pay`.
+    ///
+    /// @dev Pinning the token is what makes a settlement mean something. Before this was enforced, a
+    ///      caller could pass any address as `token`: a call to an address with no code returns
+    ///      success with empty returndata, which the ERC-20 convention reads as "transfer succeeded",
+    ///      so `pay(address(0), …)` moved nothing and still emitted a genuine `Paid` from this
+    ///      contract. Anything trusting that event as proof of payment could be handed unlimited
+    ///      forged settlements. The token is now fixed, and verified to be a contract at deployment.
+    address public immutable supportedToken;
+
+    /// @notice Receives the P2Flux fee. Receive-only, and immutable: no key can redirect the fee
+    ///         stream, and a payment verified today still verifies tomorrow.
+    address public immutable feeWallet;
+
     /// @notice One-time payment intents that have already been settled.
-    /// @dev The only persistent state this contract keeps, and the only place P2Flux stores anything
-    ///      about a payment at all. A bare `true` per settled intent - no amounts, no addresses,
-    ///      no buyer, nothing that says what was bought.
+    /// @dev The only persistent state this contract keeps, and the only thing it stores about a
+    ///      payment at all: a bare `true` per settled intent - no amounts, no addresses, no buyer,
+    ///      nothing that says what was bought.
     mapping(bytes32 => bool) public processedPayments;
 
-    /// @notice Cold key. Rotates `relayer`/`feeWallet`. Never moves funds.
-    /// @dev The splitter address is baked into every Spend Permission, so redeploying would break every
-    ///      live subscription. Rotation has to happen in place.
-    address public immutable admin;
-
-    /// @notice Hot key allowed to execute recurring charges.
-    address public relayer;
-
-    /// @notice Receives the P2Flux fee. Receive-only.
-    address public feeWallet;
-
-    event Paid(bytes32 indexed ref, address indexed recipient, uint256 net, uint256 fee);
+    /// @dev `token` is emitted so a receipt is self-describing and cannot be misread as a settlement
+    ///      in some other asset. It is always `supportedToken`; it is in the event because a verifier
+    ///      should never have to assume that.
+    event Paid(bytes32 indexed ref, address indexed recipient, address indexed token, uint256 net, uint256 fee);
     event PaymentSettled(bytes32 indexed paymentId);
-    event Charged(
-        bytes32 indexed permissionHash, address indexed recipient, uint256 net, uint256 fee, uint256 gasFee
-    );
-    event RelayerChanged(address relayer);
-    event FeeWalletChanged(address feeWallet);
 
-    error NotAdmin();
-    error NotRelayer();
     error ZeroAddress();
     error ZeroAmount();
-    error GasFeeTooHigh();
-    error AlreadyChargedThisPeriod();
+    error TokenNotSupported();
+    error NotAContract();
     error TransferFailed();
     error PaymentAlreadyProcessed(bytes32 paymentId);
 
-    constructor(address _admin, address _relayer, address _feeWallet) {
-        if (_admin == address(0) || _relayer == address(0) || _feeWallet == address(0)) revert ZeroAddress();
-        admin = _admin;
-        relayer = _relayer;
+    constructor(address _supportedToken, address _feeWallet) {
+        if (_supportedToken == address(0) || _feeWallet == address(0)) revert ZeroAddress();
+        // A token with no code would make every transfer trivially "succeed" - the exact failure this
+        // contract is now built to refuse. Refuse it once, here, rather than on every payment.
+        if (_supportedToken.code.length == 0) revert NotAContract();
+        supportedToken = _supportedToken;
         feeWallet = _feeWallet;
-    }
-
-    // --- admin -------------------------------------------------------------
-
-    function setRelayer(address _relayer) external {
-        if (msg.sender != admin) revert NotAdmin();
-        if (_relayer == address(0)) revert ZeroAddress();
-        relayer = _relayer;
-        emit RelayerChanged(_relayer);
-    }
-
-    function setFeeWallet(address _feeWallet) external {
-        if (msg.sender != admin) revert NotAdmin();
-        if (_feeWallet == address(0)) revert ZeroAddress();
-        feeWallet = _feeWallet;
-        emit FeeWalletChanged(_feeWallet);
     }
 
     // --- one-time ----------------------------------------------------------
 
     /// @notice Identifier of a one-time payment intent, over its complete immutable terms.
     ///
-    /// @dev `token` is part of the identity even though the intent is USDC-only today. Without it,
-    ///      anyone who saw a reference could settle the intent with a worthless token, burning the
-    ///      buyer's ability to pay while the recipient received nothing of value. Changing the
-    ///      token, the recipient or the amount produces a different id, so an attacker cannot
-    ///      consume a payment except by actually making it.
+    /// @dev `token` stays part of the identity even though only one token is accepted. It costs
+    ///      nothing, it keeps the id honest about what was agreed, and it means an id computed
+    ///      off-chain is only ever satisfied by a settlement in that exact asset. Changing the token,
+    ///      the recipient or the amount produces a different id, so an attacker cannot consume a
+    ///      payment except by actually making it.
     function paymentId(address token, address recipient, uint256 amount, bytes32 ref)
         public
         pure
@@ -146,6 +101,7 @@ contract P2FluxSplitter {
     ///
     /// @param ref Opaque reference. P2Flux never learns what it stands for.
     function pay(address token, address recipient, uint256 amount, bytes32 ref) public {
+        if (token != supportedToken) revert TokenNotSupported();
         if (recipient == address(0)) revert ZeroAddress();
         if (amount == 0) revert ZeroAmount();
 
@@ -158,10 +114,10 @@ contract P2FluxSplitter {
         uint256 fee = (amount * ONE_TIME_BPS) / 10_000;
 
         // Straight from buyer to each destination: the contract never holds the funds.
-        _transferFrom(token, msg.sender, recipient, amount - fee);
-        if (fee > 0) _transferFrom(token, msg.sender, feeWallet, fee);
+        _transferFrom(msg.sender, recipient, amount - fee);
+        if (fee > 0) _transferFrom(msg.sender, feeWallet, fee);
 
-        emit Paid(ref, recipient, amount - fee, fee);
+        emit Paid(ref, recipient, token, amount - fee, fee);
         emit PaymentSettled(id);
     }
 
@@ -177,52 +133,22 @@ contract P2FluxSplitter {
         bytes32 r,
         bytes32 s
     ) external {
-        // Swallow failure: a griefer can front-run the permit, which would otherwise revert the payment.
-        // If the allowance really is missing, `pay` reverts anyway.
+        // Swallow failure: a griefer can front-run the permit, which would otherwise revert the
+        // payment. If the allowance really is missing, `pay` reverts anyway. The permit is sent to
+        // the supported token only - `pay` refuses anything else before any value moves.
+        if (token != supportedToken) revert TokenNotSupported();
         try IERC20(token).permit(msg.sender, address(this), amount, deadline, v, r, s) {} catch {}
         pay(token, recipient, amount, ref);
     }
 
-    // --- recurring ---------------------------------------------------------
-
-    /// @notice Execute one recurring charge against a buyer-signed Spend Permission.
-    /// @dev Recipient and amount come from `permission.extraData`, which is inside the EIP-712 hash the
-    ///      buyer signed - neither P2Flux nor the seller can alter them.
-    /// @param gasFee USDC reimbursed to the relayer for the network cost of this transaction.
-    function charge(SpendPermission calldata permission, uint256 gasFee) external {
-        if (msg.sender != relayer) revert NotRelayer();
-        if (gasFee > MAX_GAS_FEE) revert GasFeeTooHigh();
-
-        // Hard one-charge-per-period, independent of allowance arithmetic. A reverted charge leaves
-        // `spend` at 0, so a failed attempt is still retryable inside the same period.
-        if (MANAGER.getCurrentPeriod(permission).spend != 0) revert AlreadyChargedThisPeriod();
-
-        (address recipient, uint256 amount) = abi.decode(permission.extraData, (address, uint256));
-        if (recipient == address(0)) revert ZeroAddress();
-        if (amount == 0) revert ZeroAmount();
-
-        // Pulls amount + gasFee from the buyer's account to this contract.
-        MANAGER.spend(permission, uint160(amount + gasFee));
-
-        // Fee is charged on the subscription amount only - P2Flux takes no cut of the gas reimbursement.
-        uint256 fee = (amount * RECURRING_BPS) / 10_000;
-
-        _transfer(permission.token, recipient, amount - fee);
-        if (fee > 0) _transfer(permission.token, feeWallet, fee);
-        if (gasFee > 0) _transfer(permission.token, msg.sender, gasFee);
-
-        emit Charged(MANAGER.getHash(permission), recipient, amount - fee, fee, gasFee);
-    }
-
     // --- internals ---------------------------------------------------------
 
-    function _transfer(address token, address to, uint256 value) private {
-        (bool ok, bytes memory data) = token.call(abi.encodeCall(IERC20.transfer, (to, value)));
-        if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) revert TransferFailed();
-    }
-
-    function _transferFrom(address token, address from, address to, uint256 value) private {
-        (bool ok, bytes memory data) = token.call(abi.encodeCall(IERC20.transferFrom, (from, to, value)));
+    /// @dev Always the supported token, so there is no caller-controlled address to call into. USDC
+    ///      returns a bool; a token that returns nothing is still accepted, which is the usual ERC-20
+    ///      allowance, but only because the constructor already proved this address holds code.
+    function _transferFrom(address from, address to, uint256 value) private {
+        (bool ok, bytes memory data) =
+            supportedToken.call(abi.encodeCall(IERC20.transferFrom, (from, to, value)));
         if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) revert TransferFailed();
     }
 }

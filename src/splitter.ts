@@ -1,28 +1,31 @@
-import { usdc } from './addresses.js'
-
-/** Must match `MAX_GAS_FEE` in contracts/P2FluxSplitter.sol. */
-export const MAX_GAS_FEE = usdc('0.05')
-
+import { encodeAbiParameters, keccak256, toBytes, type Address, type Hex } from 'viem'
 export const ONE_TIME_BPS = 100n
 export const RECURRING_BPS = 200n
 
 export const feeFor = (amount: bigint, bps: bigint) => (amount * bps) / 10_000n
 
-const permissionTuple = {
-  type: 'tuple',
-  name: 'permission',
-  components: [
-    { name: 'account', type: 'address' },
-    { name: 'spender', type: 'address' },
-    { name: 'token', type: 'address' },
-    { name: 'allowance', type: 'uint160' },
-    { name: 'period', type: 'uint48' },
-    { name: 'start', type: 'uint48' },
-    { name: 'end', type: 'uint48' },
-    { name: 'salt', type: 'uint256' },
-    { name: 'extraData', type: 'bytes' },
-  ],
-} as const
+/** Must match `PAYMENT_DOMAIN` in contracts/P2FluxSplitter.sol. */
+export const PAYMENT_DOMAIN = keccak256(toBytes('P2FLUX_PAYMENT_V1'))
+
+/**
+ * The settlement id the contract computes, recomputed locally.
+ *
+ * Binding a receipt to this - rather than to the `Paid` event alone - is what makes a verification
+ * mean "this exact intent, in this exact token, settled". The token is part of the identity, so a
+ * settlement in anything else simply is not this payment.
+ */
+export const paymentIdFor = (args: {
+  token: Address
+  recipient: Address
+  amount: bigint
+  reference: Hex
+}): Hex =>
+  keccak256(
+    encodeAbiParameters(
+      [{ type: 'bytes32' }, { type: 'address' }, { type: 'address' }, { type: 'uint256' }, { type: 'bytes32' }],
+      [PAYMENT_DOMAIN, args.token, args.recipient, args.amount, args.reference],
+    ),
+  )
 
 /**
  * Hand-written subset of P2FluxSplitter. The compiled artifact lives in gitignored `out/`, so the
@@ -59,13 +62,6 @@ export const splitterAbi = [
   },
   {
     type: 'function',
-    name: 'charge',
-    stateMutability: 'nonpayable',
-    inputs: [permissionTuple, { name: 'gasFee', type: 'uint256' }],
-    outputs: [],
-  },
-  {
-    type: 'function',
     name: 'paymentId',
     stateMutability: 'pure',
     inputs: [
@@ -95,38 +91,25 @@ export const splitterAbi = [
     inputs: [{ type: 'bytes32' }],
     outputs: [{ type: 'bool' }],
   },
-  { type: 'function', name: 'relayer', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] },
   { type: 'function', name: 'feeWallet', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] },
-  { type: 'function', name: 'admin', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] },
-  { type: 'function', name: 'MAX_GAS_FEE', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
+  { type: 'function', name: 'supportedToken', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] },
+  { type: 'function', name: 'PAYMENT_DOMAIN', stateMutability: 'view', inputs: [], outputs: [{ type: 'bytes32' }] },
   {
     type: 'event',
     name: 'Paid',
     inputs: [
       { name: 'ref', type: 'bytes32', indexed: true },
       { name: 'recipient', type: 'address', indexed: true },
+      { name: 'token', type: 'address', indexed: true },
       { name: 'net', type: 'uint256' },
       { name: 'fee', type: 'uint256' },
     ],
   },
   { type: 'event', name: 'PaymentSettled', inputs: [{ name: 'paymentId', type: 'bytes32', indexed: true }] },
-  {
-    type: 'event',
-    name: 'Charged',
-    inputs: [
-      { name: 'permissionHash', type: 'bytes32', indexed: true },
-      { name: 'recipient', type: 'address', indexed: true },
-      { name: 'net', type: 'uint256' },
-      { name: 'fee', type: 'uint256' },
-      { name: 'gasFee', type: 'uint256' },
-    ],
-  },
-  { type: 'error', name: 'NotAdmin', inputs: [] },
-  { type: 'error', name: 'NotRelayer', inputs: [] },
   { type: 'error', name: 'ZeroAddress', inputs: [] },
   { type: 'error', name: 'ZeroAmount', inputs: [] },
-  { type: 'error', name: 'GasFeeTooHigh', inputs: [] },
-  { type: 'error', name: 'AlreadyChargedThisPeriod', inputs: [] },
+  { type: 'error', name: 'TokenNotSupported', inputs: [] },
+  { type: 'error', name: 'NotAContract', inputs: [] },
   { type: 'error', name: 'TransferFailed', inputs: [] },
   { type: 'error', name: 'PaymentAlreadyProcessed', inputs: [{ name: 'paymentId', type: 'bytes32' }] },
 ] as const

@@ -24,8 +24,14 @@ import {
 } from '../../packages/base/src/recurring.js'
 
 const ANVIL = `${homedir()}/.foundry/bin/anvil`
-const PORT = 8555
-const RPC = `http://127.0.0.1:${PORT}`
+
+/* One anvil per harness, on its own port. `node --test` runs test files in PARALLEL PROCESSES, so a
+ * fixed port means the second suite to start either attaches to the first one's chain or fails to
+ * bind and takes the suite down with it - which is exactly what happened when the splitter tests
+ * were added alongside the recurring ones. A module-level counter is not enough for the same reason:
+ * each file gets its own module instance. The pid separates the processes, the counter separates
+ * multiple harnesses within one. */
+let nextPort = 8600 + (process.pid % 400) * 4
 
 // anvil's deterministic accounts
 export const KEYS = {
@@ -47,7 +53,9 @@ const artifact = (name: string) =>
   }
 
 export async function startHarness() {
-  const proc: ChildProcess = spawn(ANVIL, ['--port', String(PORT), '--silent'], { stdio: 'ignore' })
+  const port = nextPort++
+  const RPC = `http://127.0.0.1:${port}`
+  const proc: ChildProcess = spawn(ANVIL, ['--port', String(port), '--silent'], { stdio: 'ignore' })
 
   const chain = createPublicClient({ chain: foundry, transport: http(RPC) })
   // wait for RPC
@@ -93,6 +101,12 @@ export async function startHarness() {
   const token = await deploy('MockUSDC')
   const recurring = await deployRecurring(token)
 
+  /** A splitter bound to a token, for the one-time suite. */
+  const deploySplitter = (supportedToken: Address = token) =>
+    deploy('P2FluxSplitter', [supportedToken, feeWallet])
+
+  const splitter = await deploySplitter(token)
+
   const chainId = await chain.getChainId()
 
   const helpers = {
@@ -100,6 +114,8 @@ export async function startHarness() {
     chain,
     chainId,
     recurring,
+    splitter,
+    deploySplitter,
     token,
     feeWallet,
     gasTreasury,
