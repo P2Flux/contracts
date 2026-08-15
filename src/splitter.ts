@@ -1,6 +1,5 @@
 import { encodeAbiParameters, keccak256, toBytes, type Address, type Hex } from 'viem'
 export const ONE_TIME_BPS = 100n
-export const RECURRING_BPS = 200n
 
 export const feeFor = (amount: bigint, bps: bigint) => (amount * bps) / 10_000n
 

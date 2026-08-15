@@ -1,8 +1,17 @@
+import { readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
 import { after, before, describe, test } from 'node:test'
 import { encodeFunctionData, keccak256, parseEventLogs, toBytes, zeroAddress, type Address, type Hex } from 'viem'
 import { paymentIdFor, splitterAbi } from '../../packages/base/src/splitter.js'
 import { startHarness, type Harness } from './_anvil.js'
+
+/** The real deployed surface, straight from solc. */
+const compiledAbi = () =>
+  (
+    JSON.parse(readFileSync(new URL('../../out/P2FluxSplitter.json', import.meta.url), 'utf8')) as {
+      abi: { type: string; name?: string; stateMutability?: string }[]
+    }
+  ).abi
 
 /**
  * One-time payments, on a real chain.
@@ -181,8 +190,11 @@ describe('P2FluxSplitter', () => {
     )
   })
 
-  test('the ABI exposes no way to move tokens except pay, and no privileged role at all', async () => {
-    const writers = splitterAbi
+  test('the ABI exposes no way to move tokens except pay, and no privileged role at all', () => {
+    /* Read from the COMPILED artifact, not the hand-written mirror in packages/base: a mirror cannot
+     * tell you that the deployed bytecode grew a setter back, which is the only thing worth asserting
+     * here. */
+    const writers = compiledAbi()
       .filter((e) => e.type === 'function' && e.stateMutability === 'nonpayable')
       .map((e) => (e as { name: string }).name)
       .sort()
@@ -191,7 +203,9 @@ describe('P2FluxSplitter', () => {
   })
 
   test('the fee wallet is immutable, so a verified payment stays verifiable', async () => {
-    const setters = splitterAbi.filter((e) => e.type === 'function' && /^set/.test((e as { name: string }).name ?? ''))
+    const setters = compiledAbi()
+      .filter((e) => e.type === 'function' && /^set/.test((e as { name: string }).name ?? ''))
+      .map((e) => (e as { name: string }).name)
     assert.deepEqual(setters, [], 'nothing can redirect the fee stream')
 
     const feeWallet = await h.chain.readContract({
