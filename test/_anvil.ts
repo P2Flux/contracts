@@ -21,7 +21,7 @@ import {
   recurringAbi,
   recurringTypedData,
   type RecurringAuthorization,
-} from '../../packages/base/src/recurring.js'
+} from '../src/recurring.js'
 
 const ANVIL = `${homedir()}/.foundry/bin/anvil`
 
@@ -47,7 +47,7 @@ export const KEYS = {
 export type Harness = Awaited<ReturnType<typeof startHarness>>
 
 const artifact = (name: string) =>
-  JSON.parse(readFileSync(new URL(`../../out/${name}.json`, import.meta.url), 'utf8')) as {
+  JSON.parse(readFileSync(new URL(`../out/${name}.json`, import.meta.url), 'utf8')) as {
     abi: Abi
     bytecode: Hex
   }

@@ -20,7 +20,7 @@ import {
   recurringNet,
   recurringSubscriptionId,
   recurringTypedData,
-} from '../../packages/base/src/recurring.js'
+} from '../src/recurring.js'
 import { KEYS, baseAuth, startHarness, type Harness } from './_anvil.js'
 
 const anvilInstalled = existsSync(`${homedir()}/.foundry/bin/anvil`)
@@ -543,7 +543,7 @@ t('reentrancy through a malicious token is stopped', async () => {
   const auth = await baseAuth(h, { token: evil, period: 3600 })
   const signature = await h.sign(auth, h.payer, target)
 
-  const evilAbi = JSON.parse(readFileSync(new URL('../../out/ReentrantToken.json', import.meta.url), 'utf8')).abi
+  const evilAbi = JSON.parse(readFileSync(new URL('../out/ReentrantToken.json', import.meta.url), 'utf8')).abi
   const arm = await h.admin.writeContract({
     address: evil,
     abi: evilAbi,
@@ -564,7 +564,7 @@ t('a false-returning token is treated as failure by SafeERC20, with rollback', a
   await h.mint(h.payer.account.address, 100_000_000n, falsy)
   await h.approve(h.payer, maxUint256, falsy, target)
 
-  const abi = JSON.parse(readFileSync(new URL('../../out/FalseReturnToken.json', import.meta.url), 'utf8')).abi
+  const abi = JSON.parse(readFileSync(new URL('../out/FalseReturnToken.json', import.meta.url), 'utf8')).abi
   const set = await h.admin.writeContract({ address: falsy, abi, functionName: 'setFailTransfers', args: [true] })
   await h.chain.waitForTransactionReceipt({ hash: set })
 
@@ -596,7 +596,7 @@ t('no signature, no movement: garbage and empty signatures are rejected', async 
 
 t('the ABI has no path that moves tokens except charge', async () => {
   const artifact = JSON.parse(
-    readFileSync(new URL('../../out/P2FluxRecurring.json', import.meta.url), 'utf8'),
+    readFileSync(new URL('../out/P2FluxRecurring.json', import.meta.url), 'utf8'),
   ) as { abi: { type: string; name?: string; stateMutability?: string }[] }
 
   const writers = artifact.abi

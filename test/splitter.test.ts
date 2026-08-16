@@ -2,13 +2,13 @@ import { readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
 import { after, before, describe, test } from 'node:test'
 import { encodeFunctionData, keccak256, parseEventLogs, toBytes, zeroAddress, type Address, type Hex } from 'viem'
-import { paymentIdFor, splitterAbi } from '../../packages/base/src/splitter.js'
+import { paymentIdFor, splitterAbi } from '../src/splitter.js'
 import { startHarness, type Harness } from './_anvil.js'
 
 /** The real deployed surface, straight from solc. */
 const compiledAbi = () =>
   (
-    JSON.parse(readFileSync(new URL('../../out/P2FluxSplitter.json', import.meta.url), 'utf8')) as {
+    JSON.parse(readFileSync(new URL('../out/P2FluxSplitter.json', import.meta.url), 'utf8')) as {
       abi: { type: string; name?: string; stateMutability?: string }[]
     }
   ).abi
@@ -191,7 +191,7 @@ describe('P2FluxSplitter', () => {
   })
 
   test('the ABI exposes no way to move tokens except pay, and no privileged role at all', () => {
-    /* Read from the COMPILED artifact, not the hand-written mirror in packages/base: a mirror cannot
+    /* Read from the COMPILED artifact, not the hand-written mirror in src/: a mirror cannot
      * tell you that the deployed bytecode grew a setter back, which is the only thing worth asserting
      * here. */
     const writers = compiledAbi()

@@ -1,0 +1,32 @@
+{
+  "name": "@p2flux/contracts",
+  "version": "0.1.0",
+  "description": "P2Flux protocol: Solidity contracts, ABIs, EIP-712 definitions and public chain constants.",
+  "license": "MIT",
+  "type": "module",
+  "repository": { "type": "git", "url": "git+https://github.com/P2Flux/contracts.git" },
+  "files": ["dist", "src", "contracts", "abi"],
+  "exports": {
+    "./abi": { "types": "./dist/abi.d.ts", "default": "./dist/abi.js" },
+    "./addresses": { "types": "./dist/addresses.d.ts", "default": "./dist/addresses.js" },
+    "./recurring": { "types": "./dist/recurring.d.ts", "default": "./dist/recurring.js" },
+    "./splitter": { "types": "./dist/splitter.d.ts", "default": "./dist/splitter.js" },
+    "./artifacts/*": "./abi/*.json"
+  },
+  "scripts": {
+    "compile": "tsx scripts/compile.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "abi:sync": "tsx scripts/sync-abi.ts",
+    "abi:check": "tsx scripts/sync-abi.ts --check",
+    "test": "npm run compile && node --import tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": { "viem": "^2.21.0" },
+  "devDependencies": {
+    "@openzeppelin/contracts": "^5.6.1",
+    "@types/node": "^22.0.0",
+    "solc": "0.8.26",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
