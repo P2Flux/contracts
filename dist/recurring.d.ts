@@ -229,6 +229,48 @@ export declare const recurringAbi: readonly [{
     readonly outputs: readonly [];
 }, {
     readonly type: "function";
+    readonly name: "isValidAuthorization";
+    readonly stateMutability: "view";
+    readonly inputs: readonly [{
+        readonly type: "tuple";
+        readonly name: "auth";
+        readonly components: readonly [{
+            readonly name: "payer";
+            readonly type: "address";
+        }, {
+            readonly name: "recipient";
+            readonly type: "address";
+        }, {
+            readonly name: "token";
+            readonly type: "address";
+        }, {
+            readonly name: "amount";
+            readonly type: "uint256";
+        }, {
+            readonly name: "period";
+            readonly type: "uint48";
+        }, {
+            readonly name: "start";
+            readonly type: "uint48";
+        }, {
+            readonly name: "end";
+            readonly type: "uint48";
+        }, {
+            readonly name: "salt";
+            readonly type: "bytes32";
+        }, {
+            readonly name: "maxGasReimbursement";
+            readonly type: "uint256";
+        }];
+    }, {
+        readonly name: "signature";
+        readonly type: "bytes";
+    }];
+    readonly outputs: readonly [{
+        readonly type: "bool";
+    }];
+}, {
+    readonly type: "function";
     readonly name: "subscriptionId";
     readonly stateMutability: "view";
     readonly inputs: readonly [{
