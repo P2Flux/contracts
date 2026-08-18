@@ -49,6 +49,65 @@ describe('P2FluxSplitter', () => {
     return h.chain.waitForTransactionReceipt({ hash })
   }
 
+  test('two devices racing the same reference: exactly one settlement, one set of transfers', async () => {
+    /* The cross-device case, on a real chain.
+     *
+     * The same checkout capability can legitimately be open on a desktop and a phone. Both can look
+     * at the reference, both see it unprocessed, and both can submit - there is no lock anywhere and
+     * deliberately so. What must hold is that the buyer is debited ONCE: the contract processes a
+     * reference exactly once, so the loser reverts and no second set of transfers occurs.
+     *
+     * Both transactions are put in the same block, which is the ordering a lock would exist to
+     * prevent and the one a preflight check cannot help with. */
+    const reference = ref('cross-device-race')
+    const before = {
+      payer: await h.balance(h.payer.account.address),
+      seller: await h.balance(h.seller),
+      fee: await h.balance(h.feeWallet),
+    }
+
+    /* Two DIFFERENT senders, which is also what two devices are. One wallet submitting twice would
+     * simply queue on its own nonce and prove nothing about simultaneity. */
+    await h.mint(h.attacker.account.address, 1_000_000_000n)
+    await h.approve(h.attacker, 1_000_000_000n, h.token, h.splitter)
+    const beforeSecond = await h.balance(h.attacker.account.address)
+
+    await h.chain.request({ method: 'evm_setAutomine' as never, params: [false] as never })
+    const submissions: Hex[] = []
+    for (const wallet of [h.payer, h.attacker]) {
+      submissions.push(
+        await wallet.writeContract({
+          address: h.splitter,
+          abi: splitterAbi,
+          functionName: 'pay',
+          args: [h.token, h.seller, AMOUNT, reference],
+          gas: 300_000n,
+        }),
+      )
+    }
+    await h.chain.request({ method: 'evm_mine' as never, params: [] as never })
+    await h.chain.request({ method: 'evm_setAutomine' as never, params: [true] as never })
+
+    const receipts = await Promise.all(submissions.map((hash) => h.chain.getTransactionReceipt({ hash })))
+    assert.equal(receipts.filter((r) => r.status === 'success').length, 1, 'exactly one settles')
+    assert.equal(receipts.filter((r) => r.status === 'reverted').length, 1, 'the other reverts')
+
+    /* The money is the real assertion: exactly one buyer was debited, and each destination was paid
+     * exactly once - regardless of which of the two won. */
+    const debited =
+      before.payer -
+      (await h.balance(h.payer.account.address)) +
+      (beforeSecond - (await h.balance(h.attacker.account.address)))
+    assert.equal(debited, AMOUNT, 'exactly one payment left a buyer')
+    assert.equal((await h.balance(h.seller)) - before.seller, NET, 'merchant paid once')
+    assert.equal((await h.balance(h.feeWallet)) - before.fee, FEE, 'fee taken once')
+
+    const settled = receipts.flatMap((receipt) =>
+      parseEventLogs({ abi: splitterAbi, eventName: 'PaymentSettled', logs: receipt.logs }),
+    )
+    assert.equal(settled.length, 1, 'exactly one PaymentSettled event')
+  })
+
   test('a real payment splits 99/1 straight from the buyer, and the contract keeps nothing', async () => {
     const before = { seller: await h.balance(h.seller), fee: await h.balance(h.feeWallet) }
 

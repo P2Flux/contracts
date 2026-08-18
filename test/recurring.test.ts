@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { maxUint256, parseSignature, serializeSignature, type Address, type Hex } from 'viem'
+import { maxUint256, parseEventLogs, parseSignature, serializeSignature, type Address, type Hex } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { readFileSync } from 'node:fs'
 import {
@@ -514,6 +514,8 @@ t('a public signature enables exactly the signed payment, nothing else', async (
 t('two racing identical charges: exactly one lands', async () => {
   const auth = await baseAuth(h, { period: 3600 })
   const signature = await h.sign(auth)
+  const payerAddress = h.payer.account.address
+  const before = await h.balance(payerAddress)
 
   // Disable automine to put both transactions in the same block.
   await h.chain.request({ method: 'evm_setAutomine' as never, params: [false] as never })
@@ -528,6 +530,15 @@ t('two racing identical charges: exactly one lands', async () => {
 
   const receipts = await Promise.all([tx1, tx2].map((hash) => h.chain.getTransactionReceipt({ hash })))
   assert.equal(receipts.filter((r) => r.status === 'success').length, 1, 'exactly one winner')
+
+  /* Status alone would not prove the buyer was debited once - only that one call failed. The
+   * cross-device story needs the money checked: this is the same subscription open on two devices,
+   * both charging period 0 in the same block. */
+  const charged = receipts.flatMap((receipt) =>
+    parseEventLogs({ abi: recurringAbi, eventName: 'SubscriptionCharged', logs: receipt.logs }),
+  )
+  assert.equal(charged.length, 1, 'exactly one SubscriptionCharged event')
+  assert.equal(before - (await h.balance(payerAddress)), auth.amount, 'the payer was debited exactly once')
 })
 
 // --- reentrancy and token behaviour ----------------------------------------------
