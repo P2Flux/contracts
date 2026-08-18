@@ -3,6 +3,8 @@ pragma solidity 0.8.26;
 
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {EIP7702Utils} from "@openzeppelin/contracts/account/utils/EIP7702Utils.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -70,6 +72,9 @@ contract P2FluxRecurring is EIP712, ReentrancyGuard {
     ///      Denominated in 6-decimal USDC units (see `supportedToken`): 0.05 USDC, ~20x the worst
     ///      per-charge gas cost measured on Base.
     uint256 public constant GAS_REIMBURSEMENT_HARD_CAP = 0.05e6;
+
+    /// @dev Trailing magic that marks an ERC-6492 wrapped signature. Refused, never executed.
+    bytes32 private constant ERC6492_MAGIC = 0x6492649264926492649264926492649264926492649264926492649264926492;
 
     /// @notice Receives P2Flux profit. Immutable on purpose: no admin can redirect the fee stream,
     ///         and a compromised admin key can never gain a path to customer funds through it.
@@ -186,6 +191,20 @@ contract P2FluxRecurring is EIP712, ReentrancyGuard {
         );
     }
 
+    /// @notice Whether `signature` authorizes `auth` right now, by the exact rule `charge` applies.
+    /// @dev Exposed so off-chain setup validates through this contract rather than a reimplementation
+    ///      of it. A gate that is more permissive than the chain accepts subscriptions that can never
+    ///      be charged, which is precisely the failure this function exists to prevent.
+    ///
+    ///      "Right now" is deliberate: for a contract wallet the answer can change - see `_isAuthorized`.
+    function isValidAuthorization(RecurringAuthorization calldata auth, bytes calldata signature)
+        external
+        view
+        returns (bool)
+    {
+        return _isAuthorized(auth.payer, subscriptionId(auth), signature);
+    }
+
     /// @notice Current period index for an authorization. Reverts before start and after end.
     function currentPeriod(RecurringAuthorization calldata auth) public view returns (uint256) {
         if (auth.period == 0) revert ZeroPeriod();
@@ -233,9 +252,8 @@ contract P2FluxRecurring is EIP712, ReentrancyGuard {
         bytes32 id = subscriptionId(auth);
         if (revoked[id]) revert Revoked();
 
-        // The customer's signature over these exact terms, verified here, every time.
-        // SignatureChecker also accepts ERC-1271 signatures from contract wallets.
-        if (!SignatureChecker.isValidSignatureNow(auth.payer, id, signature)) revert InvalidSignature();
+        // The customer's authorization over these exact terms, verified here, every time.
+        if (!_isAuthorized(auth.payer, id, signature)) revert InvalidSignature();
 
         uint256 periodIndex = (block.timestamp - auth.start) / auth.period;
         if (lastChargedPeriodPlusOne[id] >= periodIndex + 1) revert AlreadyChargedThisPeriod();
@@ -267,6 +285,57 @@ contract P2FluxRecurring is EIP712, ReentrancyGuard {
         token.safeTransferFrom(auth.payer, gasTreasury, NETWORK_FEE + reimbursement);
 
         emit SubscriptionCharged(id, auth.payer, auth.recipient, periodIndex, net, fee, NETWORK_FEE, reimbursement);
+    }
+
+    // --- signature validation -----------------------------------------------
+
+    /// @dev Who may authorize a charge, by account type. Three cases, deliberately explicit rather
+    ///      than one library call, because the library's own rule is wrong for one of them.
+    ///
+    ///      OpenZeppelin's `SignatureChecker.isValidSignatureNow` branches on `code.length`: any
+    ///      account with code is sent to ERC-1271 and its ECDSA signature is never tried. Under
+    ///      EIP-7702 an ordinary EOA HAS code - the `0xef0100 || delegate` designator - so a customer
+    ///      who upgrades their wallet after subscribing would have every later charge rejected,
+    ///      silently killing a working subscription. That is the one case this function fixes.
+    ///
+    ///      It is fixed narrowly. A genuinely deployed contract wallet is still validated by ERC-1271
+    ///      and nothing else: the standard is the authority for those accounts, and an ECDSA
+    ///      shortcut around it would be a different, weaker rule than the one they opted into.
+    function _isAuthorized(address payer, bytes32 digest, bytes calldata signature) private view returns (bool) {
+        // ERC-6492 wrappers are refused before any path. They carry deploy calldata for an account
+        // that does not exist yet; this contract will not run it, and an authorization replayed
+        // monthly must belong to an account that is already deployed. Rejecting here is clearer than
+        // failing later inside a validator that cannot make sense of the wrapper.
+        if (_isERC6492(signature)) return false;
+
+        if (payer.code.length == 0) {
+            // Plain EOA.
+            (address recovered, ECDSA.RecoverError err,) = ECDSA.tryRecover(digest, signature);
+            return err == ECDSA.RecoverError.NoError && recovered == payer;
+        }
+
+        if (EIP7702Utils.fetchDelegate(payer) != address(0)) {
+            /* EIP-7702 delegated EOA. The underlying key still controls this account outright - it
+             * can move the funds directly - so honouring its ECDSA signature grants nothing it does
+             * not already have. The delegate may also answer ERC-1271, so both are accepted.
+             *
+             * `fetchDelegate` matches the 0xef0100 designator exactly, and EIP-3541 forbids deployed
+             * contract code from beginning with 0xEF, so no contract wallet can land here. */
+            (address recovered, ECDSA.RecoverError err,) = ECDSA.tryRecover(digest, signature);
+            if (err == ECDSA.RecoverError.NoError && recovered == payer) return true;
+            return SignatureChecker.isValidERC1271SignatureNow(payer, digest, signature);
+        }
+
+        /* A deployed contract wallet: ERC-1271 only, and re-asked on every charge. The account is
+         * the authority on its own signatures, so if it rotates owners, raises a threshold or
+         * upgrades such that this authorization no longer validates, charging stops. That is the
+         * wallet withdrawing consent, and stopping is the safe reading of it. */
+        return SignatureChecker.isValidERC1271SignatureNow(payer, digest, signature);
+    }
+
+    /// @dev ERC-6492 marks a wrapped signature with a 32-byte trailing magic value.
+    function _isERC6492(bytes calldata signature) private pure returns (bool) {
+        return signature.length >= 32 && bytes32(signature[signature.length - 32:]) == ERC6492_MAGIC;
     }
 
     // --- revocation ---------------------------------------------------------

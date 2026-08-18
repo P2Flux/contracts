@@ -133,3 +133,70 @@ contract Mock1271Wallet {
         v = uint8(signature[64]);
     }
 }
+
+/// @dev Wallets that misbehave in each way ERC-1271 validation must survive. Every one of these must
+///      be treated as "not authorized" rather than crashing, hanging or being trusted.
+
+/// @dev Returns a plausible but wrong selector.
+contract WrongMagicWallet {
+    function isValidSignature(bytes32, bytes calldata) external pure returns (bytes4) {
+        return 0xdeadbeef;
+    }
+}
+
+/// @dev Reverts instead of answering.
+contract RevertingWallet {
+    function isValidSignature(bytes32, bytes calldata) external pure returns (bytes4) {
+        revert("no");
+    }
+}
+
+/// @dev Returns nothing at all - `returndatasize` zero.
+contract EmptyReturnWallet {
+    fallback() external {}
+}
+
+/// @dev Returns fewer than 32 bytes, the short-returndata case.
+contract ShortReturnWallet {
+    fallback() external {
+        assembly {
+            mstore(0x00, 0x1626ba7e)
+            return(0x00, 0x04)
+        }
+    }
+}
+
+/// @dev Answers correctly until flipped, so a charge can be valid in one period and refused in the
+///      next - the "contract signatures are revocable" property that makes per-charge revalidation
+///      the only safe design.
+contract FlippableWallet {
+    bool public accept = true;
+
+    function setAccept(bool value) external {
+        accept = value;
+    }
+
+    function isValidSignature(bytes32, bytes calldata) external view returns (bytes4) {
+        return accept ? bytes4(0x1626ba7e) : bytes4(0xffffffff);
+    }
+}
+
+/// @dev Burns gas in an unbounded loop before answering. Used to prove the caller's gas bound is
+///      real: on-chain the relayer's transaction limit contains it, off-chain the API's explicit
+///      call cap does.
+contract GasBurnerWallet {
+    uint256 public sink;
+
+    function isValidSignature(bytes32, bytes calldata) external returns (bytes4) {
+        for (uint256 i = 0; i < 100_000; i++) sink = i;
+        return 0x1626ba7e;
+    }
+}
+
+/// @dev An ERC-1271 wallet that also accepts anything: the "malicious validator" case. Charging it
+///      is fine - it is spending its own funds, bounded by its own allowance and the signed terms.
+contract AlwaysValidWallet {
+    function isValidSignature(bytes32, bytes calldata) external pure returns (bytes4) {
+        return 0x1626ba7e;
+    }
+}

@@ -142,6 +142,16 @@ export const recurringAbi = [
   },
   { type: 'function', name: 'revoke', stateMutability: 'nonpayable', inputs: [authTuple], outputs: [] },
   {
+    /* The contract's own answer to "does this signature authorize these terms, right now". Callers
+     * validating a signature off-chain must use this rather than reimplementing the rule: a gate
+     * more permissive than the chain accepts subscriptions that can never be charged. */
+    type: 'function',
+    name: 'isValidAuthorization',
+    stateMutability: 'view',
+    inputs: [authTuple, { name: 'signature', type: 'bytes' }],
+    outputs: [{ type: 'bool' }],
+  },
+  {
     type: 'function',
     name: 'subscriptionId',
     stateMutability: 'view',
