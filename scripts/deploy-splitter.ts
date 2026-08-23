@@ -22,6 +22,11 @@ import { readFileSync } from 'node:fs'
 import { createPublicClient, createWalletClient, formatEther, http, type Address, type Hex } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { base, baseSepolia } from 'viem/chains'
+import { getContractAddress } from 'viem'
+import { addr, loadManifest } from './manifest.js'
+
+/* Mainnet deploys from an approved manifest and from NOTHING else - see deploy.ts and manifest.ts. */
+const manifest = process.env.DEPLOY_MANIFEST ? loadManifest() : null
 
 for (const line of readFileSync(process.env.ENV_FILE || '../p2flux_payment/.env', 'utf8').split('\n')) {
   const match = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim())
@@ -52,11 +57,28 @@ if (onChainId !== expectedChain) throw new Error(`RPC is chain ${onChainId}, exp
 const deployerKey = process.env.DEPLOYER_PK || process.env.ADMIN_PK
 if (!deployerKey) throw new Error('DEPLOYER_PK (or ADMIN_PK) is required')
 const deployer = privateKeyToAccount(deployerKey as Hex)
-const feeWallet = need('FEE_WALLET') as Address
-const token = (process.env.USDC_ADDRESS ||
-  (expectedChain === base.id
-    ? '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
-    : '0x036CbD53842c5426634e7929541eC2318f3dCF7e')) as Address
+if (expectedChain === base.id && !manifest) throw new Error('Base Mainnet requires DEPLOY_MANIFEST - no env-file deployments to Mainnet')
+
+const feeWallet: Address = manifest ? addr(manifest.SPLITTER_CONSTRUCTOR_ARG_2_FEE_WALLET) : (need('FEE_WALLET') as Address)
+const token: Address = manifest
+  ? addr(manifest.SPLITTER_CONSTRUCTOR_ARG_1_SUPPORTED_TOKEN)
+  : ((process.env.USDC_ADDRESS ||
+      (expectedChain === base.id
+        ? '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
+        : '0x036CbD53842c5426634e7929541eC2318f3dCF7e')) as Address)
+
+if (manifest) {
+  if (manifest.CHAIN_ID !== String(expectedChain)) throw new Error(`manifest is for chain ${manifest.CHAIN_ID}, CHAIN_ID is ${expectedChain}`)
+  if (deployer.address.toLowerCase() !== manifest.DEPLOYER.toLowerCase()) throw new Error('DEPLOYER_PK does not derive to the manifest DEPLOYER')
+  const nonce = await chain.getTransactionCount({ address: deployer.address })
+  const willCreate = getContractAddress({ from: deployer.address, nonce: BigInt(nonce) })
+  if (willCreate.toLowerCase() !== manifest.SPLITTER_EXPECTED_ADDRESS.toLowerCase()) {
+    throw new Error(`this deployment would create ${willCreate} (deployer nonce ${nonce}), manifest expects ${manifest.SPLITTER_EXPECTED_ADDRESS}`)
+  }
+  console.log('manifest    ', manifest.path)
+  console.log('manifest sha256', manifest.sha256)
+  console.log('will create ', willCreate, `(nonce ${nonce})`)
+}
 
 /* The constructor refuses a codeless token too, but a revert costs deployment gas and this check
  * costs one read. It also catches the classic cross-chain mistake - a Sepolia USDC address on

@@ -23,6 +23,15 @@ import { readFileSync } from 'node:fs'
 import { createPublicClient, createWalletClient, formatEther, http, type Address, type Hex } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { base, baseSepolia } from 'viem/chains'
+import { getContractAddress } from 'viem'
+import { addr, loadManifest } from './manifest.js'
+
+/* Mainnet deploys from an approved manifest and from NOTHING else: every constructor argument is
+ * read from that file (see manifest.ts for what it refuses), the deployer key must derive to the
+ * manifest's DEPLOYER, and the address this deployment will create must equal the manifest's
+ * expected address before a single byte is broadcast. The manifest's SHA-256 is printed so the
+ * run can be tied to the approval. The env-file path below stays for Sepolia rehearsals only. */
+const manifest = process.env.DEPLOY_MANIFEST ? loadManifest() : null
 /* Read the env file directly rather than adding a dependency: this repo is the canonical protocol
  * source and stays free of tooling it does not need to compile or test contracts. */
 for (const line of readFileSync(process.env.ENV_FILE || '../p2flux_payment/.env', 'utf8').split('\n')) {
@@ -58,7 +67,7 @@ if (onChainId !== expectedChain) throw new Error(`RPC is chain ${onChainId}, exp
 const deployerKey = process.env.DEPLOYER_PK || process.env.ADMIN_PK
 if (!deployerKey) throw new Error('DEPLOYER_PK (or ADMIN_PK) is required')
 const deployer = privateKeyToAccount(deployerKey as Hex)
-const adminAddress = (process.env.ADMIN_ADDRESS || deployer.address) as Address
+const adminAddress = (manifest ? addr(manifest.RECURRING_CONSTRUCTOR_ARG_1_ADMIN) : (process.env.ADMIN_ADDRESS || deployer.address)) as Address
 if (!/^0x[0-9a-fA-F]{40}$/.test(adminAddress)) throw new Error('ADMIN_ADDRESS is not an address')
 if (/^0x0{40}$/.test(adminAddress)) throw new Error('ADMIN_ADDRESS is the zero address')
 if (expectedChain === base.id && adminAddress.toLowerCase() === deployer.address.toLowerCase()) {
@@ -67,13 +76,33 @@ if (expectedChain === base.id && adminAddress.toLowerCase() === deployer.address
    * the contract - refuse it rather than let convenience decide something permanent. */
   throw new Error('On Base Mainnet, ADMIN_ADDRESS must differ from the deployer (cold admin, hot deployer)')
 }
-const relayer = privateKeyToAccount(need('RELAYER_PK') as Hex).address
-const feeWallet = need('FEE_WALLET') as Address
-const gasTreasury = need('GAS_TREASURY') as Address
-const token = (process.env.USDC_ADDRESS ||
-  (expectedChain === base.id
-    ? '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
-    : '0x036CbD53842c5426634e7929541eC2318f3dCF7e')) as Address
+if (expectedChain === base.id && !manifest) throw new Error('Base Mainnet requires DEPLOY_MANIFEST - no env-file deployments to Mainnet')
+
+/* With a manifest, the relayer is an ADDRESS from the approved document - its key lives only on
+ * the production host and is never on the deploying workstation. */
+const relayer: Address = manifest ? addr(manifest.RECURRING_CONSTRUCTOR_ARG_2_RELAYER) : privateKeyToAccount(need('RELAYER_PK') as Hex).address
+const feeWallet: Address = manifest ? addr(manifest.RECURRING_CONSTRUCTOR_ARG_3_FEE_WALLET) : (need('FEE_WALLET') as Address)
+const gasTreasury: Address = manifest ? addr(manifest.RECURRING_CONSTRUCTOR_ARG_4_GAS_TREASURY) : (need('GAS_TREASURY') as Address)
+const token: Address = manifest
+  ? addr(manifest.RECURRING_CONSTRUCTOR_ARG_5_SUPPORTED_TOKEN)
+  : ((process.env.USDC_ADDRESS ||
+      (expectedChain === base.id
+        ? '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
+        : '0x036CbD53842c5426634e7929541eC2318f3dCF7e')) as Address)
+
+if (manifest) {
+  if (manifest.CHAIN_ID !== String(expectedChain)) throw new Error(`manifest is for chain ${manifest.CHAIN_ID}, CHAIN_ID is ${expectedChain}`)
+  if (deployer.address.toLowerCase() !== manifest.DEPLOYER.toLowerCase()) throw new Error('DEPLOYER_PK does not derive to the manifest DEPLOYER')
+  if (adminAddress.toLowerCase() !== manifest.RECURRING_CONSTRUCTOR_ARG_1_ADMIN.toLowerCase()) throw new Error('ADMIN_ADDRESS does not equal the manifest ADMIN')
+  const nonce = await chain.getTransactionCount({ address: deployer.address })
+  const willCreate = getContractAddress({ from: deployer.address, nonce: BigInt(nonce) })
+  if (willCreate.toLowerCase() !== manifest.RECURRING_EXPECTED_ADDRESS.toLowerCase()) {
+    throw new Error(`this deployment would create ${willCreate} (deployer nonce ${nonce}), manifest expects ${manifest.RECURRING_EXPECTED_ADDRESS}`)
+  }
+  console.log('manifest    ', manifest.path)
+  console.log('manifest sha256', manifest.sha256)
+  console.log('will create ', willCreate, `(nonce ${nonce})`)
+}
 
 const balance = await chain.getBalance({ address: deployer.address })
 console.log('chain       ', onChainId)
