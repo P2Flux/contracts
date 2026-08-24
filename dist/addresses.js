@@ -17,6 +17,12 @@ export const BASE_MAINNET = {
     chainId: 8453,
     /** Circle USDC, native (not USDbC), 6 decimals. */
     usdc: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+    /** P2FluxSplitter, deployed 2026-08-23 (tx 0x159fabcf...19cf2), Sourcify exact_match. */
+    splitter: '0x5A3bD0945cd0C80B124870881dE49a717D20E0D0',
+    /** The block the splitter deployed in - the canonical floor for payment-recovery log searches. */
+    splitterDeployBlock: 50362015,
+    /** P2FluxRecurring, deployed 2026-08-23 (tx 0xf849fd1d...ba5ce), Sourcify exact_match. */
+    recurring: '0xb415A9910Ef627e3bEF10F5Cb9DC92a3271e0975',
     explorer: 'https://basescan.org',
 };
 /** The chains this protocol is deployed to, by id. */

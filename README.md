@@ -52,7 +52,17 @@ running install scripts. It is build output; edit `src/`.
 
 ## Deployments
 
-Base Sepolia (chainId 84532) constants live in `src/addresses.ts`. Deployment tooling that signs with
+Constants for both networks live in `src/addresses.ts`.
+
+**Base Mainnet (chainId 8453) — live:**
+
+| Contract | Address | Verified |
+|---|---|---|
+| P2FluxSplitter | `0x5A3bD0945cd0C80B124870881dE49a717D20E0D0` | [Sourcify exact_match](https://repo.sourcify.dev/8453/0x5A3bD0945cd0C80B124870881dE49a717D20E0D0) · [BaseScan](https://basescan.org/address/0x5A3bD0945cd0C80B124870881dE49a717D20E0D0) |
+| P2FluxRecurring | `0xb415A9910Ef627e3bEF10F5Cb9DC92a3271e0975` | [Sourcify exact_match](https://repo.sourcify.dev/8453/0xb415A9910Ef627e3bEF10F5Cb9DC92a3271e0975) · [BaseScan](https://basescan.org/address/0xb415A9910Ef627e3bEF10F5Cb9DC92a3271e0975) |
+| USDC (Circle, native) | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | canonical |
+
+Base Sepolia (chainId 84532) remains the test deployment. Deployment tooling that signs with
 a live key is deliberately not here — it belongs with the operator, in the private infrastructure.
 
 ## License
