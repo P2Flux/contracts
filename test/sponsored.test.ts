@@ -828,3 +828,304 @@ describe('sponsored payments and gas sponsorship', () => {
 })
 
 const KEYS_ATTACKER = privateKeyToAccount(KEYS.attacker).address
+
+/**
+ * The attacks the economic model has to survive, written as tests rather than as assurances.
+ *
+ * The one that matters is abandonment: a customer who signs, gets a sponsored transaction, and then
+ * walks away. The design's claim is that this costs P2Flux nothing, because the fee is collected in
+ * the same transaction that spends the gas. These tests hold that claim to the chain.
+ */
+describe('adversarial: sponsorship economics', () => {
+  let h: Harness
+  let token: Address
+  let sponsor: Address
+  let splitter: Address
+  let tokenName: string
+
+  const HARD = 250_000n
+  const FEE_UNITS = 4_000n
+
+  const splitSig = (signature: Hex) => ({
+    v: Number(`0x${signature.slice(130, 132)}`),
+    r: `0x${signature.slice(2, 66)}` as Hex,
+    s: `0x${signature.slice(66, 130)}` as Hex,
+  })
+
+  const payerFor = (seed: number) => {
+    const key = `0x${(seed + 0x9000).toString(16).padStart(64, '0')}` as Hex
+    return { account: privateKeyToAccount(key), wallet: h.wallet(key) }
+  }
+
+  before(async () => {
+    h = await startHarness()
+    token = await h.deploy('MockFiatToken')
+    tokenName = (await h.chain.readContract({
+      address: token,
+      abi: artifact('MockFiatToken').abi as never,
+      functionName: 'name',
+    })) as string
+    sponsor = await h.deploy('P2FluxGasSponsor', [token, h.gasTreasury, h.relayer.account.address, HARD])
+    splitter = await h.deploy('P2FluxSponsoredSplitter', [
+      token,
+      h.feeWallet,
+      h.gasTreasury,
+      h.relayer.account.address,
+      100_000n,
+      HARD,
+    ])
+  })
+  after(async () => h.stop())
+
+  test('a customer who abandons the subscription after a sponsored permit still paid for it', async () => {
+    const { account, wallet } = payerFor(1)
+    await h.mint(account.address, 1_000_000_000n, token)
+    const nowSeconds = await h.now()
+    const args = {
+      payer: account.address,
+      spender: h.recurring,
+      value: 50_000_000n,
+      deadline: BigInt(nowSeconds + 300),
+      networkFee: FEE_UNITS,
+      validBefore: BigInt(nowSeconds + 300),
+    }
+    const nonce = sponsorPermitNonce({
+      chainId: h.chainId,
+      sponsor,
+      token,
+      payer: args.payer,
+      spender: args.spender,
+      allowanceValue: args.value,
+      allowanceDeadline: args.deadline,
+      networkFee: args.networkFee,
+      validBefore: args.validBefore,
+    })
+    const permitSig = splitSig(
+      await wallet.signTypedData(
+        permitTypedData({
+          chainId: h.chainId,
+          token,
+          tokenName,
+          tokenVersion: '2',
+          owner: args.payer,
+          spender: args.spender,
+          value: args.value,
+          nonce: (await h.chain.readContract({
+            address: token,
+            abi: artifact('MockFiatToken').abi as never,
+            functionName: 'nonces',
+            args: [args.payer],
+          })) as bigint,
+          deadline: args.deadline,
+        }) as never,
+      ),
+    )
+    const feeSig = splitSig(
+      await wallet.signTypedData(
+        receiveWithAuthorizationTypedData({
+          chainId: h.chainId,
+          token,
+          tokenName,
+          tokenVersion: '2',
+          from: args.payer,
+          to: sponsor,
+          value: args.networkFee,
+          validBefore: args.validBefore,
+          nonce,
+        }) as never,
+      ),
+    )
+
+    const treasuryBefore = await h.balance(h.gasTreasury, token)
+    const hash = await h.relayer.writeContract({
+      address: sponsor,
+      abi: gasSponsorAbi,
+      functionName: 'sponsorPermit',
+      args: [
+        args.payer,
+        args.spender,
+        args.value,
+        args.deadline,
+        permitSig.v,
+        permitSig.r,
+        permitSig.s,
+        args.networkFee,
+        args.validBefore,
+        feeSig.v,
+        feeSig.r,
+        feeSig.s,
+      ],
+    })
+    await h.chain.waitForTransactionReceipt({ hash })
+
+    // The customer now abandons: no subscription is ever charged. P2Flux is still whole, because the
+    // fee for the gas it spent was collected by the same transaction that spent it.
+    assert.equal(await h.balance(h.gasTreasury, token), treasuryBefore + FEE_UNITS)
+    assert.equal(await h.balance(sponsor, token), 0n)
+  })
+
+  test('an abandoned setup that never reaches the chain costs nothing at all', async () => {
+    // Signatures alone move no value and cost no gas: the relayer simply never submits. This is the
+    // whole reason the design refuses to broadcast before every signature is in hand.
+    const { account, wallet } = payerFor(2)
+    await h.mint(account.address, 1_000_000_000n, token)
+    const before = await h.balance(account.address, token)
+    const nowSeconds = await h.now()
+    await wallet.signTypedData(
+      permitTypedData({
+        chainId: h.chainId,
+        token,
+        tokenName,
+        tokenVersion: '2',
+        owner: account.address,
+        spender: h.recurring,
+        value: 1n,
+        nonce: 0n,
+        deadline: BigInt(nowSeconds + 300),
+      }) as never,
+    )
+    assert.equal(await h.balance(account.address, token), before)
+    assert.equal(await allowanceRead(h, token, account.address, h.recurring), 0n)
+  })
+
+  test('a repeated sponsorship request cannot drain the relayer: each one funds itself', async () => {
+    // Ten sponsorships in a row. The treasury gains exactly ten fees; nothing accumulates in the
+    // contract, and no attempt is executed without its own payment.
+    const treasuryBefore = await h.balance(h.gasTreasury, token)
+    for (let i = 0; i < 10; i++) {
+      const { account, wallet } = payerFor(100 + i)
+      await h.mint(account.address, 1_000_000n, token)
+      const nowSeconds = await h.now()
+      const args = {
+        payer: account.address,
+        spender: h.recurring,
+        value: 1_000_000n,
+        deadline: BigInt(nowSeconds + 300),
+        networkFee: FEE_UNITS,
+        validBefore: BigInt(nowSeconds + 300),
+      }
+      const nonce = sponsorPermitNonce({
+        chainId: h.chainId,
+        sponsor,
+        token,
+        payer: args.payer,
+        spender: args.spender,
+        allowanceValue: args.value,
+        allowanceDeadline: args.deadline,
+        networkFee: args.networkFee,
+        validBefore: args.validBefore,
+      })
+      const permitSig = splitSig(
+        await wallet.signTypedData(
+          permitTypedData({
+            chainId: h.chainId,
+            token,
+            tokenName,
+            tokenVersion: '2',
+            owner: args.payer,
+            spender: args.spender,
+            value: args.value,
+            nonce: 0n,
+            deadline: args.deadline,
+          }) as never,
+        ),
+      )
+      const feeSig = splitSig(
+        await wallet.signTypedData(
+          receiveWithAuthorizationTypedData({
+            chainId: h.chainId,
+            token,
+            tokenName,
+            tokenVersion: '2',
+            from: args.payer,
+            to: sponsor,
+            value: args.networkFee,
+            validBefore: args.validBefore,
+            nonce,
+          }) as never,
+        ),
+      )
+      const hash = await h.relayer.writeContract({
+        address: sponsor,
+        abi: gasSponsorAbi,
+        functionName: 'sponsorPermit',
+        args: [
+          args.payer,
+          args.spender,
+          args.value,
+          args.deadline,
+          permitSig.v,
+          permitSig.r,
+          permitSig.s,
+          args.networkFee,
+          args.validBefore,
+          feeSig.v,
+          feeSig.r,
+          feeSig.s,
+        ],
+      })
+      await h.chain.waitForTransactionReceipt({ hash })
+    }
+    assert.equal(await h.balance(h.gasTreasury, token), treasuryBefore + FEE_UNITS * 10n)
+    assert.equal(await h.balance(sponsor, token), 0n)
+  })
+
+  test('a customer whose balance covers the price but not the fees pays nothing and gets nothing', async () => {
+    const { account, wallet } = payerFor(3)
+    const amount = 10_000_000n
+    await h.mint(account.address, amount, token) // exactly the price
+    const p: SponsoredPayment = {
+      payer: account.address,
+      recipient: h.seller,
+      amount,
+      ref: keccak256(toBytes('adversarial-short')),
+      networkFee: FEE_UNITS,
+      validBefore: BigInt((await h.now()) + 300),
+    }
+    const nonce = sponsoredPaymentNonce({
+      chainId: h.chainId,
+      splitter,
+      token,
+      serviceFee: 100_000n,
+      payment: p,
+    })
+    const sig = splitSig(
+      await wallet.signTypedData(
+        receiveWithAuthorizationTypedData({
+          chainId: h.chainId,
+          token,
+          tokenName,
+          tokenVersion: '2',
+          from: p.payer,
+          to: splitter,
+          value: p.amount + p.networkFee + 100_000n,
+          validBefore: p.validBefore,
+          nonce,
+        }) as never,
+      ),
+    )
+    const sellerBefore = await h.balance(h.seller, token)
+    assert.equal(
+      await h.expectRevert(
+        h.relayer.writeContract({
+          address: splitter,
+          abi: sponsoredSplitterAbi,
+          functionName: 'payWithAuthorization',
+          args: [p, sig.v, sig.r, sig.s],
+        }),
+      ),
+      'reverted',
+    )
+    assert.equal(await h.balance(account.address, token), amount)
+    assert.equal(await h.balance(h.seller, token), sellerBefore)
+    assert.equal(await h.balance(splitter, token), 0n)
+  })
+})
+
+const allowanceRead = async (h: Harness, token: Address, owner: Address, spender: Address) =>
+  (await h.chain.readContract({
+    address: token,
+    abi: artifact('MockFiatToken').abi as never,
+    functionName: 'allowance',
+    args: [owner, spender],
+  })) as bigint
