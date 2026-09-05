@@ -184,6 +184,13 @@ describe('sponsored payments and gas sponsorship', () => {
       assert.equal(await h.balance(h.gasTreasury, token), before.gas + NETWORK_FEE)
       assert.equal(await h.chain.getBalance({ address: account.address }), nativeBefore)
       assert.equal(await h.balance(splitter, token), 0n, 'the contract keeps nothing')
+
+      /* The API prices this transaction from a measured constant, because a quote is made before the
+       * buyer has signed and `eth_estimateGas` over an unsigned call reverts inside the token. The
+       * figure is printed so the constant can be re-derived, and bounded so a contract change that
+       * moves it is noticed here rather than as under-quoted sponsorships in production. */
+      console.log(`# gas payWithAuthorization (mock token, cold): ${receipt.gasUsed}`)
+      assert.ok(receipt.gasUsed < 200_000n, `payWithAuthorization used ${receipt.gasUsed} gas`)
     })
 
     test('the settlement is announced the way the recovery path reads it', async () => {
@@ -527,6 +534,10 @@ describe('sponsored payments and gas sponsorship', () => {
       assert.equal(settled.length, 1)
       assert.equal(settled[0]!.args.networkFee, NETWORK_FEE)
       assert.equal(settled[0]!.args.allowanceValue, args.value)
+
+      // Same reason as the splitter's figure: the API's quote constant is derived from this number.
+      console.log(`# gas sponsorPermit (mock token, cold): ${receipt.gasUsed}`)
+      assert.ok(receipt.gasUsed < 200_000n, `sponsorPermit used ${receipt.gasUsed} gas`)
     })
 
     test('a permit that reverts takes the fee collection with it', async () => {
