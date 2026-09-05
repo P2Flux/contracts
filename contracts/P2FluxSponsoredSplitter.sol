@@ -26,10 +26,17 @@ interface IERC3009 {
 /// @notice One-time payments for a buyer who holds the payment token and no native gas currency.
 ///
 /// @dev The buyer signs; the relayer sends. One signature authorizes the token to move exactly
-///      `amount + networkFee + GAS_SERVICE_FEE` into this contract, and this contract splits it in
-///      the same transaction. Nothing is sponsored on credit: the transfer that pays the relayer
-///      back for the gas it is spending happens inside the transaction that spends it, so a
-///      transaction that fails costs the relayer its gas and moves no money at all.
+///      `amount + networkFee` into this contract, and this contract splits it in the same
+///      transaction. Nothing is sponsored on credit: the transfer that pays the relayer back for
+///      the gas it is spending happens inside the transaction that spends it, so a transaction that
+///      fails costs the relayer its gas and moves no money at all.
+///
+///      Who funds what is the same rule the recurring contract follows, and it is the whole of the
+///      pricing model: P2Flux's fees come OUT of the amount, so the merchant funds them, and the
+///      buyer is debited the price plus the network cost of moving it and nothing else. A buyer who
+///      pays natively is debited the price and pays their own gas; a buyer who pays in the token is
+///      debited the price and a quoted amount for the gas someone else spends. Neither of them ever
+///      pays a P2Flux fee on top of the price.
 ///
 ///      What the buyer signs is the token's own `ReceiveWithAuthorization`. Its EIP-712 domain binds
 ///      the chain and the token; its `nonce` is derived here from every remaining term - this
@@ -60,17 +67,22 @@ contract P2FluxSponsoredSplitter is ReentrancyGuard {
     /// @notice The only token this deployment settles.
     address public immutable supportedToken;
 
-    /// @notice Receives the profit fee and the gas-service fee. P2Flux revenue.
+    /// @notice Receives the profit fee, and nothing else. P2Flux revenue.
     address public immutable feeWallet;
 
-    /// @notice Receives the quoted network fee. Compensates native gas; not revenue.
+    /// @notice Receives the fixed network fee and the buyer's quoted network fee. Compensates
+    ///         native gas; not revenue, and never mixed with it.
     address public immutable gasTreasury;
 
     /// @notice The only address that may execute a sponsored payment.
     address public immutable relayer;
 
-    /// @notice Flat P2Flux fee for the gas service, in token base units. 0.10 USDC at 6 decimals.
-    uint256 public immutable GAS_SERVICE_FEE;
+    /// @notice The fixed network fee, in token base units. 0.10 USDC at 6 decimals.
+    /// @dev Merchant-funded, out of the amount, and paid to `gasTreasury` - the same quantity, the
+    ///      same destination and the same reasoning as `NETWORK_FEE` on the recurring contract. It
+    ///      is the gas side of the business, so it must not reach `feeWallet`: revenue and network
+    ///      costs stay separately accountable, and neither subsidises the other.
+    uint256 public immutable FIXED_NETWORK_FEE;
 
     /// @notice Ceiling on the quoted network fee a single payment may carry, in token base units.
     /// @dev Defence in depth beneath the buyer's own signed amount: whatever a quote says and
@@ -87,7 +99,7 @@ contract P2FluxSponsoredSplitter is ReentrancyGuard {
         uint256 net,
         uint256 fee,
         uint256 networkFee,
-        uint256 serviceFee
+        uint256 fixedNetworkFee
     );
 
     /// @dev Same signature as P2FluxSplitter's, so one log filter locates a settlement in either.
@@ -106,7 +118,7 @@ contract P2FluxSponsoredSplitter is ReentrancyGuard {
         address _feeWallet,
         address _gasTreasury,
         address _relayer,
-        uint256 _gasServiceFee,
+        uint256 _fixedNetworkFee,
         uint256 _maxNetworkFeeHardCap
     ) {
         if (
@@ -120,7 +132,7 @@ contract P2FluxSponsoredSplitter is ReentrancyGuard {
         feeWallet = _feeWallet;
         gasTreasury = _gasTreasury;
         relayer = _relayer;
-        GAS_SERVICE_FEE = _gasServiceFee;
+        FIXED_NETWORK_FEE = _fixedNetworkFee;
         MAX_NETWORK_FEE_HARD_CAP = _maxNetworkFeeHardCap;
     }
 
@@ -176,15 +188,28 @@ contract P2FluxSponsoredSplitter is ReentrancyGuard {
                 p.amount,
                 p.ref,
                 p.networkFee,
-                GAS_SERVICE_FEE,
+                FIXED_NETWORK_FEE,
                 p.validBefore
             )
         );
     }
 
-    /// @notice What the buyer's wallet will be debited for these terms.
-    function totalDebit(uint256 amount, uint256 networkFee) public view returns (uint256) {
-        return amount + networkFee + GAS_SERVICE_FEE;
+    /// @notice What the buyer's wallet will be debited for these terms: the price, plus the network
+    ///         cost of moving it. P2Flux's fees are not here - the merchant funds those.
+    function totalDebit(uint256 amount, uint256 networkFee) public pure returns (uint256) {
+        return amount + networkFee;
+    }
+
+    /// @notice The smallest amount these terms can settle: anything at or below this leaves the
+    ///         merchant nothing, and is refused rather than paid.
+    /// @dev Derived, never configured. `fee` rounds down, so the true boundary is the first amount
+    ///      whose `amount - fee - FIXED_NETWORK_FEE` is positive.
+    function minimumAmount() external view returns (uint256) {
+        uint256 amount = FIXED_NETWORK_FEE + 1;
+        while (amount <= (amount * ONE_TIME_BPS) / 10_000 + FIXED_NETWORK_FEE) {
+            amount++;
+        }
+        return amount;
     }
 
     /// @notice Settle a one-time payment funded entirely by the buyer's signature.
@@ -203,10 +228,13 @@ contract P2FluxSponsoredSplitter is ReentrancyGuard {
         if (p.amount == 0) revert ZeroAmount();
         if (p.networkFee > MAX_NETWORK_FEE_HARD_CAP) revert NetworkFeeTooHigh();
 
+        /* Both fees come out of the amount, so the merchant funds them and the buyer is debited the
+         * price plus the network fee and nothing more. Rounding on the profit fee favours the
+         * merchant. The seller must be left with something: an amount that cannot cover both fees
+         * is refused outright rather than silently paying the merchant zero or reverting inside the
+         * token on an underflow. Same rule, same order, as P2FluxRecurring. */
         uint256 fee = (p.amount * ONE_TIME_BPS) / 10_000;
-        // The seller must be left with something; a price that cannot cover its own fee is refused
-        // before anything moves rather than paying the merchant zero.
-        if (p.amount <= fee) revert AmountTooSmall();
+        if (p.amount <= fee + FIXED_NETWORK_FEE) revert AmountTooSmall();
 
         // Checks, effects, interactions. A revert below rolls this back with everything else, so a
         // failed attempt leaves the intent payable and the buyer's authorization unconsumed.
@@ -227,7 +255,7 @@ contract P2FluxSponsoredSplitter is ReentrancyGuard {
         IERC3009(supportedToken).receiveWithAuthorization(
             p.payer,
             address(this),
-            p.amount + p.networkFee + GAS_SERVICE_FEE,
+            p.amount + p.networkFee,
             0,
             p.validBefore,
             authorizationNonce(p),
@@ -237,18 +265,21 @@ contract P2FluxSponsoredSplitter is ReentrancyGuard {
         );
 
         IERC20 token = IERC20(supportedToken);
-        token.safeTransfer(p.recipient, p.amount - fee);
-        // Profit fee and service fee are both P2Flux revenue and share a destination; the network
-        // fee is a cost recovery and goes somewhere else, so the two are never merged.
-        uint256 revenue = fee + GAS_SERVICE_FEE;
-        if (revenue > 0) token.safeTransfer(feeWallet, revenue);
-        if (p.networkFee > 0) token.safeTransfer(gasTreasury, p.networkFee);
+        token.safeTransfer(p.recipient, p.amount - fee - FIXED_NETWORK_FEE);
+        // The profit fee is revenue and goes to the fee wallet. The fixed network fee and the
+        // buyer's quoted network fee are both the gas side of the business and share a destination,
+        // so they travel together - one transfer rather than two identical ones, exactly as the
+        // recurring contract sends `NETWORK_FEE + reimbursement`.
+        if (fee > 0) token.safeTransfer(feeWallet, fee);
+        token.safeTransfer(gasTreasury, p.networkFee + FIXED_NETWORK_FEE);
 
         // Custody lasted three statements. Anything left OVER would mean the arithmetic above
         // drifted from the amount pulled, and this contract has no way to ever move it out again.
         if (token.balanceOf(address(this)) != heldBefore) revert ResidualBalance();
 
-        emit SponsoredPaid(p.ref, p.recipient, p.payer, p.amount - fee, fee, p.networkFee, GAS_SERVICE_FEE);
+        emit SponsoredPaid(
+            p.ref, p.recipient, p.payer, p.amount - fee - FIXED_NETWORK_FEE, fee, p.networkFee, FIXED_NETWORK_FEE
+        );
         emit PaymentSettled(id);
     }
 }

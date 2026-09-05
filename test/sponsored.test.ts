@@ -39,9 +39,11 @@ const artifact = (name: string) =>
 
 const AMOUNT = 100_000_000n // 100.00 USDC
 const FEE = 1_000_000n // 1%
-const NET = AMOUNT - FEE // 99.00
 const NETWORK_FEE = 4_000n // 0.004
-const SERVICE_FEE = 100_000n // 0.10
+const FIXED_NETWORK_FEE = 100_000n // 0.10
+/* Both fees come out of the amount: the merchant funds them, and the buyer is debited the price
+ * plus the network fee and nothing else. 100.00 - 1.00 - 0.10 = 98.90. */
+const NET = AMOUNT - FEE - FIXED_NETWORK_FEE // 98.90
 const HARD_CAP = 250_000n // 0.25
 const MINT = 1_000_000_000n
 
@@ -80,7 +82,7 @@ describe('sponsored payments and gas sponsorship', () => {
       chainId: h.chainId,
       splitter: at,
       token,
-      serviceFee: SERVICE_FEE,
+      fixedNetworkFee: FIXED_NETWORK_FEE,
       payment: opts.nonceFrom ?? p,
     })
     const signature = await signer.signTypedData(
@@ -91,7 +93,7 @@ describe('sponsored payments and gas sponsorship', () => {
         tokenVersion: '2',
         from: p.payer,
         to: at,
-        value: p.amount + p.networkFee + SERVICE_FEE,
+        value: p.amount + p.networkFee,
         validBefore: p.validBefore,
         nonce,
       }) as never,
@@ -149,7 +151,7 @@ describe('sponsored payments and gas sponsorship', () => {
       h.feeWallet,
       h.gasTreasury,
       h.relayer.account.address,
-      SERVICE_FEE,
+      FIXED_NETWORK_FEE,
       HARD_CAP,
     ])
     sponsor = await h.deploy('P2FluxGasSponsor', [
@@ -178,10 +180,12 @@ describe('sponsored payments and gas sponsorship', () => {
       const receipt = await pay(p, await signPayment(p, wallet))
       assert.equal(receipt.status, 'success')
 
-      assert.equal(await h.balance(account.address, token), before.payer - AMOUNT - NETWORK_FEE - SERVICE_FEE)
+      assert.equal(await h.balance(account.address, token), before.payer - AMOUNT - NETWORK_FEE,
+        'the buyer pays the price and the network fee, and no P2Flux fee on top')
       assert.equal(await h.balance(h.seller, token), before.seller + NET)
-      assert.equal(await h.balance(h.feeWallet, token), before.fee + FEE + SERVICE_FEE)
-      assert.equal(await h.balance(h.gasTreasury, token), before.gas + NETWORK_FEE)
+      assert.equal(await h.balance(h.feeWallet, token), before.fee + FEE, 'revenue only')
+      assert.equal(await h.balance(h.gasTreasury, token), before.gas + NETWORK_FEE + FIXED_NETWORK_FEE,
+        'the gas side of the business: the fixed fee and the quoted one, never mixed with revenue')
       assert.equal(await h.chain.getBalance({ address: account.address }), nativeBefore)
       assert.equal(await h.balance(splitter, token), 0n, 'the contract keeps nothing')
 
@@ -191,6 +195,93 @@ describe('sponsored payments and gas sponsorship', () => {
        * moves it is noticed here rather than as under-quoted sponsorships in production. */
       console.log(`# gas payWithAuthorization (mock token, cold): ${receipt.gasUsed}`)
       assert.ok(receipt.gasUsed < 200_000n, `payWithAuthorization used ${receipt.gasUsed} gas`)
+    })
+
+    test('the buyer is debited the price and the network fee, and never a P2Flux fee', async () => {
+      /* The exact arithmetic of the corrected model, on the numbers it will be reviewed against.
+       * The first implementation pulled the fixed fee from the buyer on top of the price, which
+       * made a 1.00 payment cost 1.104078 instead of 1.004078 and paid the merchant 0.99 instead
+       * of 0.89. Both halves of that mistake are asserted against here. */
+      const amount = 1_000_000n // 1.000000 USDC
+      const networkFee = 4_078n // 0.004078, the fee quoted live on Sepolia
+      const fee = 10_000n // 1%
+      const net = 890_000n // 1.000000 - 0.010000 - 0.100000
+
+      const { account, wallet } = freshPayer(9)
+      await h.mint(account.address, MINT, token)
+      const before = {
+        payer: await h.balance(account.address, token),
+        seller: await h.balance(h.seller, token),
+        fee: await h.balance(h.feeWallet, token),
+        gas: await h.balance(h.gasTreasury, token),
+      }
+
+      const p = terms({
+        payer: account.address,
+        amount,
+        networkFee,
+        ref: ref('exact-economics'),
+        validBefore: BigInt((await h.now()) + 300),
+      })
+      assert.equal(
+        await h.chain.readContract({
+          address: splitter,
+          abi: sponsoredSplitterAbi,
+          functionName: 'totalDebit',
+          args: [amount, networkFee],
+        }),
+        1_004_078n,
+        'the contract itself says 1.004078, not 1.104078',
+      )
+
+      const receipt = await pay(p, await signPayment(p, wallet))
+      assert.equal(receipt.status, 'success')
+
+      assert.equal(before.payer - (await h.balance(account.address, token)), 1_004_078n, 'buyer debit')
+      assert.equal((await h.balance(h.seller, token)) - before.seller, net, 'merchant net')
+      assert.equal((await h.balance(h.feeWallet, token)) - before.fee, fee, 'percentage fee, alone')
+      assert.equal(
+        (await h.balance(h.gasTreasury, token)) - before.gas,
+        networkFee + FIXED_NETWORK_FEE,
+        'the fixed fee once, and the quoted network fee once',
+      )
+      // Every unit accounted for: what left the buyer plus what the merchant funded is what arrived.
+      assert.equal(net + fee + FIXED_NETWORK_FEE + networkFee, amount + networkFee)
+      assert.equal(await h.balance(splitter, token), 0n, 'the contract keeps nothing')
+    })
+
+    test('an amount that cannot cover the fees the merchant funds is refused', async () => {
+      /* Derived, not configured: the contract computes its own floor from the two fees, and refuses
+       * anything at or below it rather than paying the merchant zero. */
+      const minimum = (await h.chain.readContract({
+        address: splitter,
+        abi: sponsoredSplitterAbi,
+        functionName: 'minimumAmount',
+      })) as bigint
+      // 0.10 + 1 unit is not enough once the 1% is taken; the first workable amount is just above.
+      assert.ok(minimum > FIXED_NETWORK_FEE, 'the floor is above the fixed fee alone')
+      assert.equal(minimum - (minimum * 100n) / 10_000n - FIXED_NETWORK_FEE > 0n, true, 'and it leaves the merchant something')
+
+      const { account, wallet } = freshPayer(10)
+      await h.mint(account.address, MINT, token)
+      const tooSmall = terms({
+        payer: account.address,
+        amount: minimum - 1n,
+        ref: ref('too-small'),
+        validBefore: BigInt((await h.now()) + 300),
+      })
+      const tooSmallSig = await signPayment(tooSmall, wallet)
+      await assert.rejects(() => pay(tooSmall, tooSmallSig), /AmountTooSmall/)
+
+      // And the floor itself settles, which is what makes it the floor rather than a guess.
+      const ok = terms({
+        payer: account.address,
+        amount: minimum,
+        ref: ref('at-the-floor'),
+        validBefore: BigInt((await h.now()) + 300),
+      })
+      const receipt = await pay(ok, await signPayment(ok, wallet))
+      assert.equal(receipt.status, 'success')
     })
 
     test('the settlement is announced the way the recovery path reads it', async () => {
@@ -210,9 +301,9 @@ describe('sponsored payments and gas sponsorship', () => {
           net: paid[0]!.args.net,
           fee: paid[0]!.args.fee,
           networkFee: paid[0]!.args.networkFee,
-          serviceFee: paid[0]!.args.serviceFee,
+          fixedNetworkFee: paid[0]!.args.fixedNetworkFee,
         },
-        { net: NET, fee: FEE, networkFee: NETWORK_FEE, serviceFee: SERVICE_FEE },
+        { net: NET, fee: FEE, networkFee: NETWORK_FEE, fixedNetworkFee: FIXED_NETWORK_FEE },
       )
 
       const settled = parseEventLogs({
@@ -238,7 +329,7 @@ describe('sponsored payments and gas sponsorship', () => {
       })) as Hex
       assert.equal(
         onChain,
-        sponsoredPaymentNonce({ chainId: h.chainId, splitter, token, serviceFee: SERVICE_FEE, payment: p }),
+        sponsoredPaymentNonce({ chainId: h.chainId, splitter, token, fixedNetworkFee: FIXED_NETWORK_FEE, payment: p }),
       )
     })
 
@@ -348,7 +439,7 @@ describe('sponsored payments and gas sponsorship', () => {
         h.feeWallet,
         h.gasTreasury,
         h.relayer.account.address,
-        SERVICE_FEE,
+        FIXED_NETWORK_FEE,
         HARD_CAP,
       ])
       const { account, wallet } = freshPayer(9)
@@ -363,18 +454,29 @@ describe('sponsored payments and gas sponsorship', () => {
       assert.equal(await h.expectRevert(pay(p, sig, { at: other })), 'reverted')
     })
 
-    test('an amount too small to cover its own fee is refused before anything moves', async () => {
+    test('an amount too small to cover the fees the merchant funds is refused before anything moves', async () => {
+      /* This used to accept a single base unit: the 1% rounded to nothing, so `amount <= fee` was
+       * false and the merchant received the whole unit. The fixed fee is merchant-funded now, so a
+       * unit cannot pay for itself and the same test asserts the opposite outcome. */
       const { account, wallet } = freshPayer(11)
       await h.mint(account.address, MINT, token)
       const p = terms({
         payer: account.address,
-        amount: 1n, // fee rounds to 0, so the seller would receive the whole 1 unit... but see below
+        amount: 1n,
         ref: ref('order-tiny'),
         validBefore: BigInt((await h.now()) + 300),
       })
-      // 1 unit: fee = 0, so `amount <= fee` is false and the payment is legal. The refusal case is
-      // amount == 0, which cannot even be quoted.
-      assert.equal((await pay(p, await signPayment(p, wallet))).status, 'success')
+      assert.equal(await h.expectRevert(pay(p, await signPayment(p, wallet))), 'AmountTooSmall')
+
+      // Exactly the fixed fee is still nothing for the merchant, and is refused for the same reason.
+      const exact = terms({
+        payer: account.address,
+        amount: FIXED_NETWORK_FEE,
+        ref: ref('order-exact-fee'),
+        validBefore: BigInt((await h.now()) + 300),
+      })
+      assert.equal(await h.expectRevert(pay(exact, await signPayment(exact, wallet))), 'AmountTooSmall')
+
       const zero = terms({ payer: account.address, amount: 0n, ref: ref('order-zero') })
       assert.equal(await h.expectRevert(pay(zero, await signPayment(zero, wallet))), 'ZeroAmount')
     })
@@ -1114,7 +1216,7 @@ describe('adversarial: sponsorship economics', () => {
       chainId: h.chainId,
       splitter,
       token,
-      serviceFee: 100_000n,
+      fixedNetworkFee: FIXED_NETWORK_FEE,
       payment: p,
     })
     const sig = splitSig(
@@ -1126,7 +1228,7 @@ describe('adversarial: sponsorship economics', () => {
           tokenVersion: '2',
           from: p.payer,
           to: splitter,
-          value: p.amount + p.networkFee + 100_000n,
+          value: p.amount + p.networkFee,
           validBefore: p.validBefore,
           nonce,
         }) as never,
@@ -1222,7 +1324,7 @@ describe('donated dust cannot disable either contract', () => {
       chainId: h.chainId,
       splitter,
       token,
-      serviceFee: 100_000n,
+      fixedNetworkFee: FIXED_NETWORK_FEE,
       payment: p,
     })
     const signature = await wallet.signTypedData(
@@ -1233,7 +1335,7 @@ describe('donated dust cannot disable either contract', () => {
         tokenVersion: '2',
         from: p.payer,
         to: splitter,
-        value: p.amount + p.networkFee + 100_000n,
+        value: p.amount + p.networkFee,
         validBefore: p.validBefore,
         nonce,
       }) as never,

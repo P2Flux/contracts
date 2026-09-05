@@ -26,7 +26,8 @@ export declare const sponsoredPaymentNonce: (args: {
     chainId: number;
     splitter: Address;
     token: Address;
-    serviceFee: bigint;
+    /** The contract's `FIXED_NETWORK_FEE`. Merchant-funded, but still a signed term of the deal. */
+    fixedNetworkFee: bigint;
     payment: SponsoredPayment;
 }) => Hex;
 /** The fee-authorization nonce a permit sponsorship's terms produce. */
@@ -49,8 +50,16 @@ export declare const sponsorPermitNonce: (args: {
     networkFee: bigint;
     validBefore: bigint;
 }) => Hex;
-/** What the buyer's wallet is debited for a sponsored payment. */
-export declare const sponsoredTotalDebit: (amount: bigint, networkFee: bigint, serviceFee: bigint) => bigint;
+/**
+ * What the buyer's wallet is debited for a sponsored payment: the price and the network fee.
+ *
+ * P2Flux's fees are deliberately absent. They come out of the amount, the merchant funds them, and
+ * a buyer paying in the token is debited exactly what a buyer paying natively is - plus the cost of
+ * the transaction someone else is sending for them.
+ */
+export declare const sponsoredTotalDebit: (amount: bigint, networkFee: bigint) => bigint;
+/** What the merchant receives: the amount, less both fees the merchant funds. */
+export declare const sponsoredMerchantNet: (amount: bigint, oneTimeBps: bigint, fixedNetworkFee: bigint) => bigint;
 /** Hand-written subset of P2FluxSponsoredSplitter; the compiled artifact lives in gitignored out/. */
 export declare const sponsoredSplitterAbi: readonly [{
     readonly type: "function";
@@ -149,7 +158,29 @@ export declare const sponsoredSplitterAbi: readonly [{
     }];
 }, {
     readonly type: "function";
-    readonly name: "GAS_SERVICE_FEE";
+    readonly name: "FIXED_NETWORK_FEE";
+    readonly stateMutability: "view";
+    readonly inputs: readonly [];
+    readonly outputs: readonly [{
+        readonly type: "uint256";
+    }];
+}, {
+    readonly type: "function";
+    readonly name: "totalDebit";
+    readonly stateMutability: "pure";
+    readonly inputs: readonly [{
+        readonly name: "amount";
+        readonly type: "uint256";
+    }, {
+        readonly name: "networkFee";
+        readonly type: "uint256";
+    }];
+    readonly outputs: readonly [{
+        readonly type: "uint256";
+    }];
+}, {
+    readonly type: "function";
+    readonly name: "minimumAmount";
     readonly stateMutability: "view";
     readonly inputs: readonly [];
     readonly outputs: readonly [{
@@ -259,7 +290,7 @@ export declare const sponsoredSplitterAbi: readonly [{
         readonly name: "networkFee";
         readonly type: "uint256";
     }, {
-        readonly name: "serviceFee";
+        readonly name: "fixedNetworkFee";
         readonly type: "uint256";
     }];
 }, {

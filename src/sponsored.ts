@@ -32,7 +32,8 @@ export const sponsoredPaymentNonce = (args: {
   chainId: number
   splitter: Address
   token: Address
-  serviceFee: bigint
+  /** The contract's `FIXED_NETWORK_FEE`. Merchant-funded, but still a signed term of the deal. */
+  fixedNetworkFee: bigint
   payment: SponsoredPayment
 }): Hex =>
   keccak256(
@@ -60,7 +61,7 @@ export const sponsoredPaymentNonce = (args: {
         args.payment.amount,
         args.payment.ref,
         args.payment.networkFee,
-        args.serviceFee,
+        args.fixedNetworkFee,
         args.payment.validBefore,
       ],
     ),
@@ -118,9 +119,18 @@ export const sponsorPermitNonce = (args: {
     ),
   )
 
-/** What the buyer's wallet is debited for a sponsored payment. */
-export const sponsoredTotalDebit = (amount: bigint, networkFee: bigint, serviceFee: bigint) =>
-  amount + networkFee + serviceFee
+/**
+ * What the buyer's wallet is debited for a sponsored payment: the price and the network fee.
+ *
+ * P2Flux's fees are deliberately absent. They come out of the amount, the merchant funds them, and
+ * a buyer paying in the token is debited exactly what a buyer paying natively is - plus the cost of
+ * the transaction someone else is sending for them.
+ */
+export const sponsoredTotalDebit = (amount: bigint, networkFee: bigint) => amount + networkFee
+
+/** What the merchant receives: the amount, less both fees the merchant funds. */
+export const sponsoredMerchantNet = (amount: bigint, oneTimeBps: bigint, fixedNetworkFee: bigint) =>
+  amount - (amount * oneTimeBps) / 10_000n - fixedNetworkFee
 
 /** Hand-written subset of P2FluxSponsoredSplitter; the compiled artifact lives in gitignored out/. */
 export const sponsoredSplitterAbi = [
@@ -180,7 +190,15 @@ export const sponsoredSplitterAbi = [
     outputs: [{ type: 'bytes32' }],
   },
   { type: 'function', name: 'SPONSOR_PAY_DOMAIN', stateMutability: 'view', inputs: [], outputs: [{ type: 'bytes32' }] },
-  { type: 'function', name: 'GAS_SERVICE_FEE', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
+  { type: 'function', name: 'FIXED_NETWORK_FEE', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
+  {
+    type: 'function',
+    name: 'totalDebit',
+    stateMutability: 'pure',
+    inputs: [{ name: 'amount', type: 'uint256' }, { name: 'networkFee', type: 'uint256' }],
+    outputs: [{ type: 'uint256' }],
+  },
+  { type: 'function', name: 'minimumAmount', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
   {
     type: 'function',
     name: 'MAX_NETWORK_FEE_HARD_CAP',
@@ -210,7 +228,7 @@ export const sponsoredSplitterAbi = [
       { name: 'net', type: 'uint256' },
       { name: 'fee', type: 'uint256' },
       { name: 'networkFee', type: 'uint256' },
-      { name: 'serviceFee', type: 'uint256' },
+      { name: 'fixedNetworkFee', type: 'uint256' },
     ],
   },
   {
