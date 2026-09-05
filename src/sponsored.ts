@@ -179,6 +179,7 @@ export const sponsoredSplitterAbi = [
     ],
     outputs: [{ type: 'bytes32' }],
   },
+  { type: 'function', name: 'SPONSOR_PAY_DOMAIN', stateMutability: 'view', inputs: [], outputs: [{ type: 'bytes32' }] },
   { type: 'function', name: 'GAS_SERVICE_FEE', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
   {
     type: 'function',
@@ -274,6 +275,7 @@ export const gasSponsorAbi = [
     inputs: [{ type: 'bytes32' }],
     outputs: [{ type: 'bool' }],
   },
+  { type: 'function', name: 'SPONSOR_DOMAIN', stateMutability: 'view', inputs: [], outputs: [{ type: 'bytes32' }] },
   {
     type: 'function',
     name: 'MAX_SPONSOR_FEE_HARD_CAP',

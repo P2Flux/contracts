@@ -141,6 +141,14 @@ export declare const sponsoredSplitterAbi: readonly [{
     }];
 }, {
     readonly type: "function";
+    readonly name: "SPONSOR_PAY_DOMAIN";
+    readonly stateMutability: "view";
+    readonly inputs: readonly [];
+    readonly outputs: readonly [{
+        readonly type: "bytes32";
+    }];
+}, {
+    readonly type: "function";
     readonly name: "GAS_SERVICE_FEE";
     readonly stateMutability: "view";
     readonly inputs: readonly [];
@@ -349,6 +357,14 @@ export declare const gasSponsorAbi: readonly [{
     }];
     readonly outputs: readonly [{
         readonly type: "bool";
+    }];
+}, {
+    readonly type: "function";
+    readonly name: "SPONSOR_DOMAIN";
+    readonly stateMutability: "view";
+    readonly inputs: readonly [];
+    readonly outputs: readonly [{
+        readonly type: "bytes32";
     }];
 }, {
     readonly type: "function";
