@@ -27,6 +27,10 @@
       "types": "./dist/recurring.d.ts",
       "default": "./dist/recurring.js"
     },
+    "./sponsored": {
+      "types": "./dist/sponsored.d.ts",
+      "default": "./dist/sponsored.js"
+    },
     "./splitter": {
       "types": "./dist/splitter.d.ts",
       "default": "./dist/splitter.js"

@@ -6,7 +6,13 @@ const require = createRequire(import.meta.url)
 const solc = require('solc')
 
 const root = new URL('..', import.meta.url).pathname
-const CONTRACTS = ['P2FluxSplitter.sol', 'P2FluxRecurring.sol', 'test/MockTokens.sol']
+const CONTRACTS = [
+  'P2FluxSplitter.sol',
+  'P2FluxRecurring.sol',
+  'P2FluxSponsoredSplitter.sol',
+  'P2FluxGasSponsor.sol',
+  'test/MockTokens.sol',
+]
 
 const sources: Record<string, { content: string }> = {}
 for (const name of CONTRACTS) {

@@ -200,3 +200,99 @@ contract AlwaysValidWallet {
         return 0x1626ba7e;
     }
 }
+
+/**
+ * @notice A FiatToken-v2-shaped mock: EIP-2612 `permit` and EIP-3009
+ *         `receiveWithAuthorization`, with the real domain, typehashes and nonce semantics.
+ *
+ * @dev The sponsored contracts lean on the token to enforce most of their security - signature
+ *      validity, single use of a nonce, the deadline, and `to == msg.sender` - so a mock that only
+ *      pretended to check those would test nothing. This one checks all four the way USDC does.
+ */
+contract MockFiatToken is MockUSDC {
+    bytes32 public constant PERMIT_TYPEHASH =
+        keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)");
+    bytes32 public constant RECEIVE_WITH_AUTHORIZATION_TYPEHASH = keccak256(
+        "ReceiveWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
+    );
+
+    string public constant version = "2";
+
+    mapping(address => uint256) public nonces;
+    mapping(address => mapping(bytes32 => bool)) public authorizationState;
+
+    event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce);
+
+    function DOMAIN_SEPARATOR() public view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256(bytes(name)),
+                keccak256(bytes(version)),
+                block.chainid,
+                address(this)
+            )
+        );
+    }
+
+    function permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s)
+        external
+        virtual
+    {
+        require(block.timestamp <= deadline, "permit expired");
+        bytes32 digest = _digest(
+            keccak256(abi.encode(PERMIT_TYPEHASH, owner, spender, value, nonces[owner]++, deadline))
+        );
+        require(_recover(digest, v, r, s) == owner, "invalid permit signature");
+        allowance[owner][spender] = value;
+        emit Approval(owner, spender, value);
+    }
+
+    function receiveWithAuthorization(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external {
+        require(to == msg.sender, "caller must be the payee");
+        require(block.timestamp > validAfter, "authorization is not yet valid");
+        require(block.timestamp < validBefore, "authorization is expired");
+        require(!authorizationState[from][nonce], "authorization is used or canceled");
+
+        bytes32 digest = _digest(
+            keccak256(
+                abi.encode(
+                    RECEIVE_WITH_AUTHORIZATION_TYPEHASH, from, to, value, validAfter, validBefore, nonce
+                )
+            )
+        );
+        require(_recover(digest, v, r, s) == from, "invalid authorization signature");
+
+        authorizationState[from][nonce] = true;
+        emit AuthorizationUsed(from, nonce);
+        require(_move(from, to, value), "transfer failed");
+    }
+
+    function _digest(bytes32 structHash) private view returns (bytes32) {
+        return keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR(), structHash));
+    }
+
+    function _recover(bytes32 digest, uint8 v, bytes32 r, bytes32 s) private pure returns (address) {
+        require(uint256(s) <= 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0, "malleable s");
+        address signer = ecrecover(digest, v, r, s);
+        require(signer != address(0), "invalid signature");
+        return signer;
+    }
+}
+
+/// @notice A FiatToken whose `permit` always reverts: proves the fee pull is rolled back with it.
+contract PermitRevertingToken is MockFiatToken {
+    function permit(address, address, uint256, uint256, uint8, bytes32, bytes32) external pure override {
+        revert("permit refused");
+    }
+}
