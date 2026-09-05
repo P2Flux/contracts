@@ -30,6 +30,14 @@ export declare const sponsoredPaymentNonce: (args: {
     payment: SponsoredPayment;
 }) => Hex;
 /** The fee-authorization nonce a permit sponsorship's terms produce. */
+export type PermitSponsorship = {
+    payer: Address;
+    spender: Address;
+    allowanceValue: bigint;
+    allowanceDeadline: bigint;
+    networkFee: bigint;
+    validBefore: bigint;
+};
 export declare const sponsorPermitNonce: (args: {
     chainId: number;
     sponsor: Address;
@@ -261,17 +269,27 @@ export declare const gasSponsorAbi: readonly [{
     readonly name: "sponsorPermit";
     readonly stateMutability: "nonpayable";
     readonly inputs: readonly [{
-        readonly name: "payer";
-        readonly type: "address";
-    }, {
-        readonly name: "spender";
-        readonly type: "address";
-    }, {
-        readonly name: "allowanceValue";
-        readonly type: "uint256";
-    }, {
-        readonly name: "allowanceDeadline";
-        readonly type: "uint256";
+        readonly name: "sponsorship";
+        readonly type: "tuple";
+        readonly components: readonly [{
+            readonly name: "payer";
+            readonly type: "address";
+        }, {
+            readonly name: "spender";
+            readonly type: "address";
+        }, {
+            readonly name: "allowanceValue";
+            readonly type: "uint256";
+        }, {
+            readonly name: "allowanceDeadline";
+            readonly type: "uint256";
+        }, {
+            readonly name: "networkFee";
+            readonly type: "uint256";
+        }, {
+            readonly name: "validBefore";
+            readonly type: "uint256";
+        }];
     }, {
         readonly name: "permitV";
         readonly type: "uint8";
@@ -281,12 +299,6 @@ export declare const gasSponsorAbi: readonly [{
     }, {
         readonly name: "permitS";
         readonly type: "bytes32";
-    }, {
-        readonly name: "networkFee";
-        readonly type: "uint256";
-    }, {
-        readonly name: "validBefore";
-        readonly type: "uint256";
     }, {
         readonly name: "feeV";
         readonly type: "uint8";
@@ -303,23 +315,27 @@ export declare const gasSponsorAbi: readonly [{
     readonly name: "authorizationNonce";
     readonly stateMutability: "view";
     readonly inputs: readonly [{
-        readonly name: "payer";
-        readonly type: "address";
-    }, {
-        readonly name: "spender";
-        readonly type: "address";
-    }, {
-        readonly name: "allowanceValue";
-        readonly type: "uint256";
-    }, {
-        readonly name: "allowanceDeadline";
-        readonly type: "uint256";
-    }, {
-        readonly name: "networkFee";
-        readonly type: "uint256";
-    }, {
-        readonly name: "validBefore";
-        readonly type: "uint256";
+        readonly name: "sponsorship";
+        readonly type: "tuple";
+        readonly components: readonly [{
+            readonly name: "payer";
+            readonly type: "address";
+        }, {
+            readonly name: "spender";
+            readonly type: "address";
+        }, {
+            readonly name: "allowanceValue";
+            readonly type: "uint256";
+        }, {
+            readonly name: "allowanceDeadline";
+            readonly type: "uint256";
+        }, {
+            readonly name: "networkFee";
+            readonly type: "uint256";
+        }, {
+            readonly name: "validBefore";
+            readonly type: "uint256";
+        }];
     }];
     readonly outputs: readonly [{
         readonly type: "bytes32";

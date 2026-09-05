@@ -52,8 +52,8 @@ interface ISponsorToken {
 ///      and its expiry. Change any of them and the signature is for a different nonce, which the
 ///      token has never seen and this contract will not compute.
 ///
-///      No owner, no pause, no upgrade, no withdrawal path, no custody: the balance is zero before
-///      and after every call.
+///      No owner, no pause, no upgrade, no withdrawal path, no custody: a call leaves no more than it
+///      found, and tokens sent here by anyone else are inert rather than reachable.
 contract P2FluxGasSponsor is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -115,28 +115,39 @@ contract P2FluxGasSponsor is ReentrancyGuard {
         MAX_SPONSOR_FEE_HARD_CAP = _maxSponsorFeeHardCap;
     }
 
+    /// @notice The exact terms of one sponsorship. Grouped so the whole set travels as one value:
+    ///         it is what the customer signs, what the relayer submits, and what the nonce is
+    ///         derived from, and splitting it into loose arguments is how those three drift apart.
+    /// @param payer The wallet whose allowance changes, and whose signature pays for the change.
+    /// @param spender What the allowance is for - the recurring contract, never a caller's choice.
+    /// @param allowanceValue The allowance to set. Zero removes it, which stops collection.
+    /// @param allowanceDeadline The permit's deadline; the same instant as the quote's expiry.
+    /// @param networkFee The quoted fee the customer accepted. Not a gas measurement.
+    /// @param validBefore Quote expiry, enforced by the token.
+    struct PermitSponsorship {
+        address payer;
+        address spender;
+        uint256 allowanceValue;
+        uint256 allowanceDeadline;
+        uint256 networkFee;
+        uint256 validBefore;
+    }
+
     /// @notice The fee-authorization nonce these sponsorship terms produce.
-    function authorizationNonce(
-        address payer,
-        address spender,
-        uint256 allowanceValue,
-        uint256 allowanceDeadline,
-        uint256 networkFee,
-        uint256 validBefore
-    ) public view returns (bytes32) {
+    function authorizationNonce(PermitSponsorship calldata sponsorship) public view returns (bytes32) {
         return keccak256(
             abi.encode(
                 SPONSOR_DOMAIN,
                 block.chainid,
                 address(this),
                 supportedToken,
-                payer,
+                sponsorship.payer,
                 OPERATION_PERMIT,
-                spender,
-                allowanceValue,
-                allowanceDeadline,
-                networkFee,
-                validBefore
+                sponsorship.spender,
+                sponsorship.allowanceValue,
+                sponsorship.allowanceDeadline,
+                sponsorship.networkFee,
+                sponsorship.validBefore
             )
         );
     }
@@ -148,53 +159,71 @@ contract P2FluxGasSponsor is ReentrancyGuard {
     ///      transaction, so a failure there returns the fee. `permit` is called directly rather than
     ///      in a try/catch: a permit that cannot execute must undo the fee, not be shrugged off.
     ///
-    /// @param allowanceValue The allowance to set. Zero is a normal, supported request: it removes
-    ///        the store's ability to collect. It does not revoke a recurring authorization - only
-    ///        the payer calling P2FluxRecurring.revoke does that.
-    /// @param networkFee The quoted fee the customer accepted and signed. A price agreed before
-    ///        execution, not a measurement of the gas this transaction ends up using.
+    ///      An `allowanceValue` of zero is a normal, supported request: it removes the store's
+    ///      ability to collect. It does not revoke a recurring authorization - only the payer
+    ///      calling P2FluxRecurring.revoke does that.
     function sponsorPermit(
-        address payer,
-        address spender,
-        uint256 allowanceValue,
-        uint256 allowanceDeadline,
+        PermitSponsorship calldata sponsorship,
         uint8 permitV,
         bytes32 permitR,
         bytes32 permitS,
-        uint256 networkFee,
-        uint256 validBefore,
         uint8 feeV,
         bytes32 feeR,
         bytes32 feeS
     ) external nonReentrant {
         if (msg.sender != relayer) revert NotRelayer();
-        if (payer == address(0) || spender == address(0)) revert ZeroAddress();
-        if (networkFee > MAX_SPONSOR_FEE_HARD_CAP) revert NetworkFeeTooHigh();
+        if (sponsorship.payer == address(0) || sponsorship.spender == address(0)) revert ZeroAddress();
+        if (sponsorship.networkFee > MAX_SPONSOR_FEE_HARD_CAP) revert NetworkFeeTooHigh();
 
-        bytes32 nonce =
-            authorizationNonce(payer, spender, allowanceValue, allowanceDeadline, networkFee, validBefore);
+        bytes32 nonce = authorizationNonce(sponsorship);
 
         // Checks, effects, interactions. The token enforces the same thing independently; this
         // makes the refusal explicit and keeps the mirror honest even under a token that did not.
         if (settledSponsorships[nonce]) revert SponsorshipAlreadySettled(nonce);
         settledSponsorships[nonce] = true;
 
-        ISponsorToken token = ISponsorToken(supportedToken);
+        /* See P2FluxSponsoredSplitter: the invariant is that this call leaves no more than it found,
+         * not that the balance is zero. A contract with no sweep that asserted zero could be
+         * disabled permanently by anyone willing to send it one base unit. */
+        uint256 heldBefore = IERC20(supportedToken).balanceOf(address(this));
 
         // 1. The customer pays for the gas this transaction is spending, before it is spent on
         //    their behalf. `to == address(this)` is checked by the token itself.
-        if (networkFee > 0) {
-            token.receiveWithAuthorization(
-                payer, address(this), networkFee, 0, validBefore, nonce, feeV, feeR, feeS
+        if (sponsorship.networkFee > 0) {
+            ISponsorToken(supportedToken).receiveWithAuthorization(
+                sponsorship.payer,
+                address(this),
+                sponsorship.networkFee,
+                0,
+                sponsorship.validBefore,
+                nonce,
+                feeV,
+                feeR,
+                feeS
             );
-            IERC20(supportedToken).safeTransfer(gasTreasury, networkFee);
+            IERC20(supportedToken).safeTransfer(gasTreasury, sponsorship.networkFee);
         }
 
         // 2. The operation the customer asked for. A failure here reverts step 1 with it.
-        token.permit(payer, spender, allowanceValue, allowanceDeadline, permitV, permitR, permitS);
+        ISponsorToken(supportedToken).permit(
+            sponsorship.payer,
+            sponsorship.spender,
+            sponsorship.allowanceValue,
+            sponsorship.allowanceDeadline,
+            permitV,
+            permitR,
+            permitS
+        );
 
-        if (IERC20(supportedToken).balanceOf(address(this)) != 0) revert ResidualBalance();
+        if (IERC20(supportedToken).balanceOf(address(this)) != heldBefore) revert ResidualBalance();
 
-        emit SponsorshipSettled(payer, OPERATION_PERMIT, spender, allowanceValue, networkFee, nonce);
+        emit SponsorshipSettled(
+            sponsorship.payer,
+            OPERATION_PERMIT,
+            sponsorship.spender,
+            sponsorship.allowanceValue,
+            sponsorship.networkFee,
+            nonce
+        );
     }
 }

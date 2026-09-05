@@ -463,15 +463,17 @@ describe('sponsored payments and gas sponsorship', () => {
         abi: gasSponsorAbi,
         functionName: 'sponsorPermit',
         args: [
-          args.payer,
-          args.spender,
-          args.value,
-          args.deadline,
+          {
+            payer: args.payer,
+            spender: args.spender,
+            allowanceValue: args.value,
+            allowanceDeadline: args.deadline,
+            networkFee: args.networkFee,
+            validBefore: args.validBefore,
+          },
           permitSig.v,
           permitSig.r,
           permitSig.s,
-          args.networkFee,
-          args.validBefore,
           feeSig.v,
           feeSig.r,
           feeSig.s,
@@ -737,7 +739,16 @@ describe('sponsored payments and gas sponsorship', () => {
         address: sponsor,
         abi: gasSponsorAbi,
         functionName: 'authorizationNonce',
-        args: [args.payer, args.spender, args.value, args.deadline, args.networkFee, args.validBefore],
+        args: [
+          {
+            payer: args.payer,
+            spender: args.spender,
+            allowanceValue: args.value,
+            allowanceDeadline: args.deadline,
+            networkFee: args.networkFee,
+            validBefore: args.validBefore,
+          },
+        ],
       })) as Hex
       assert.equal(
         onChain,
@@ -808,15 +819,17 @@ describe('sponsored payments and gas sponsorship', () => {
         abi: gasSponsorAbi,
         functionName: 'sponsorPermit',
         args: [
-          args.payer,
-          args.spender,
-          args.value,
-          args.deadline,
+          {
+            payer: args.payer,
+            spender: args.spender,
+            allowanceValue: args.value,
+            allowanceDeadline: args.deadline,
+            networkFee: args.networkFee,
+            validBefore: args.validBefore,
+          },
           paymentSig.v,
           paymentSig.r,
           paymentSig.s,
-          args.networkFee,
-          args.validBefore,
           paymentSig.v,
           paymentSig.r,
           paymentSig.s,
@@ -942,15 +955,17 @@ describe('adversarial: sponsorship economics', () => {
       abi: gasSponsorAbi,
       functionName: 'sponsorPermit',
       args: [
-        args.payer,
-        args.spender,
-        args.value,
-        args.deadline,
+        {
+          payer: args.payer,
+          spender: args.spender,
+          allowanceValue: args.value,
+          allowanceDeadline: args.deadline,
+          networkFee: args.networkFee,
+          validBefore: args.validBefore,
+        },
         permitSig.v,
         permitSig.r,
         permitSig.s,
-        args.networkFee,
-        args.validBefore,
         feeSig.v,
         feeSig.r,
         feeSig.s,
@@ -1050,15 +1065,17 @@ describe('adversarial: sponsorship economics', () => {
         abi: gasSponsorAbi,
         functionName: 'sponsorPermit',
         args: [
-          args.payer,
-          args.spender,
-          args.value,
-          args.deadline,
+          {
+            payer: args.payer,
+            spender: args.spender,
+            allowanceValue: args.value,
+            allowanceDeadline: args.deadline,
+            networkFee: args.networkFee,
+            validBefore: args.validBefore,
+          },
           permitSig.v,
           permitSig.r,
           permitSig.s,
-          args.networkFee,
-          args.validBefore,
           feeSig.v,
           feeSig.r,
           feeSig.s,
@@ -1129,3 +1146,188 @@ const allowanceRead = async (h: Harness, token: Address, owner: Address, spender
     functionName: 'allowance',
     args: [owner, spender],
   })) as bigint
+
+/**
+ * The griefing attack an immutable contract cannot recover from.
+ *
+ * Both contracts assert that a call leaves no more than it found, rather than that the balance is
+ * zero. The difference is the whole product: anyone may transfer tokens to any address, and a
+ * zero-balance assertion in a contract with no owner, no pause and no sweep would be one dust
+ * transfer away from refusing every payment forever.
+ */
+describe('donated dust cannot disable either contract', () => {
+  let h: Harness
+  let token: Address
+  let splitter: Address
+  let sponsor: Address
+  let tokenName: string
+
+  before(async () => {
+    h = await startHarness()
+    token = await h.deploy('MockFiatToken')
+    tokenName = (await h.chain.readContract({
+      address: token,
+      abi: artifact('MockFiatToken').abi as never,
+      functionName: 'name',
+    })) as string
+    splitter = await h.deploy('P2FluxSponsoredSplitter', [
+      token,
+      h.feeWallet,
+      h.gasTreasury,
+      h.relayer.account.address,
+      100_000n,
+      250_000n,
+    ])
+    sponsor = await h.deploy('P2FluxGasSponsor', [token, h.gasTreasury, h.relayer.account.address, 250_000n])
+    // One base unit, from a stranger, to each contract.
+    await h.mint(h.attacker.account.address, 1_000n, token)
+    for (const target of [splitter, sponsor]) {
+      const hash = await h.attacker.writeContract({
+        address: token,
+        abi: artifact('MockFiatToken').abi as never,
+        functionName: 'transfer',
+        args: [target, 1n],
+      })
+      await h.chain.waitForTransactionReceipt({ hash })
+    }
+  })
+  after(async () => h.stop())
+
+  test('a sponsored payment still settles, and the dust stays where it landed', async () => {
+    const key = `0x${(0x5000).toString(16).padStart(64, '0')}` as Hex
+    const account = privateKeyToAccount(key)
+    const wallet = h.wallet(key)
+    await h.mint(account.address, 1_000_000_000n, token)
+
+    const p = {
+      payer: account.address,
+      recipient: h.seller,
+      amount: 100_000_000n,
+      ref: keccak256(toBytes('dust-payment')),
+      networkFee: 4_000n,
+      validBefore: BigInt((await h.now()) + 300),
+    }
+    const nonce = sponsoredPaymentNonce({
+      chainId: h.chainId,
+      splitter,
+      token,
+      serviceFee: 100_000n,
+      payment: p,
+    })
+    const signature = await wallet.signTypedData(
+      receiveWithAuthorizationTypedData({
+        chainId: h.chainId,
+        token,
+        tokenName,
+        tokenVersion: '2',
+        from: p.payer,
+        to: splitter,
+        value: p.amount + p.networkFee + 100_000n,
+        validBefore: p.validBefore,
+        nonce,
+      }) as never,
+    )
+    const sig = {
+      v: Number(`0x${signature.slice(130, 132)}`),
+      r: `0x${signature.slice(2, 66)}` as Hex,
+      s: `0x${signature.slice(66, 130)}` as Hex,
+    }
+
+    const hash = await h.relayer.writeContract({
+      address: splitter,
+      abi: sponsoredSplitterAbi,
+      functionName: 'payWithAuthorization',
+      args: [p, sig.v, sig.r, sig.s],
+    })
+    const receipt = await h.chain.waitForTransactionReceipt({ hash })
+    assert.equal(receipt.status, 'success', 'dust must not brick the contract')
+    assert.equal(await h.balance(splitter, token), 1n, 'the dust is still there, and still inert')
+  })
+
+  test('a sponsorship still settles with dust in the contract', async () => {
+    const key = `0x${(0x5001).toString(16).padStart(64, '0')}` as Hex
+    const account = privateKeyToAccount(key)
+    const wallet = h.wallet(key)
+    await h.mint(account.address, 1_000_000_000n, token)
+
+    const nowSeconds = await h.now()
+    const args = {
+      payer: account.address,
+      spender: h.recurring,
+      value: 50_000_000n,
+      deadline: BigInt(nowSeconds + 300),
+      networkFee: 4_000n,
+      validBefore: BigInt(nowSeconds + 300),
+    }
+    const nonce = sponsorPermitNonce({
+      chainId: h.chainId,
+      sponsor,
+      token,
+      payer: args.payer,
+      spender: args.spender,
+      allowanceValue: args.value,
+      allowanceDeadline: args.deadline,
+      networkFee: args.networkFee,
+      validBefore: args.validBefore,
+    })
+    const split = (signature: Hex) => ({
+      v: Number(`0x${signature.slice(130, 132)}`),
+      r: `0x${signature.slice(2, 66)}` as Hex,
+      s: `0x${signature.slice(66, 130)}` as Hex,
+    })
+    const permitSig = split(
+      await wallet.signTypedData(
+        permitTypedData({
+          chainId: h.chainId,
+          token,
+          tokenName,
+          tokenVersion: '2',
+          owner: args.payer,
+          spender: args.spender,
+          value: args.value,
+          nonce: 0n,
+          deadline: args.deadline,
+        }) as never,
+      ),
+    )
+    const feeSig = split(
+      await wallet.signTypedData(
+        receiveWithAuthorizationTypedData({
+          chainId: h.chainId,
+          token,
+          tokenName,
+          tokenVersion: '2',
+          from: args.payer,
+          to: sponsor,
+          value: args.networkFee,
+          validBefore: args.validBefore,
+          nonce,
+        }) as never,
+      ),
+    )
+
+    const hash = await h.relayer.writeContract({
+      address: sponsor,
+      abi: gasSponsorAbi,
+      functionName: 'sponsorPermit',
+      args: [
+        {
+          payer: args.payer,
+          spender: args.spender,
+          allowanceValue: args.value,
+          allowanceDeadline: args.deadline,
+          networkFee: args.networkFee,
+          validBefore: args.validBefore,
+        },
+        permitSig.v,
+        permitSig.r,
+        permitSig.s,
+        feeSig.v,
+        feeSig.r,
+        feeSig.s,
+      ],
+    })
+    assert.equal((await h.chain.waitForTransactionReceipt({ hash })).status, 'success')
+    assert.equal(await h.balance(sponsor, token), 1n)
+  })
+})

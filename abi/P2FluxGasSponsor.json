@@ -157,34 +157,41 @@
   {
     "inputs": [
       {
-        "internalType": "address",
-        "name": "payer",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "spender",
-        "type": "address"
-      },
-      {
-        "internalType": "uint256",
-        "name": "allowanceValue",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "allowanceDeadline",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "networkFee",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "validBefore",
-        "type": "uint256"
+        "components": [
+          {
+            "internalType": "address",
+            "name": "payer",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "spender",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "allowanceValue",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "allowanceDeadline",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "networkFee",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "validBefore",
+            "type": "uint256"
+          }
+        ],
+        "internalType": "struct P2FluxGasSponsor.PermitSponsorship",
+        "name": "sponsorship",
+        "type": "tuple"
       }
     ],
     "name": "authorizationNonce",
@@ -246,24 +253,41 @@
   {
     "inputs": [
       {
-        "internalType": "address",
-        "name": "payer",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "spender",
-        "type": "address"
-      },
-      {
-        "internalType": "uint256",
-        "name": "allowanceValue",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "allowanceDeadline",
-        "type": "uint256"
+        "components": [
+          {
+            "internalType": "address",
+            "name": "payer",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "spender",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "allowanceValue",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "allowanceDeadline",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "networkFee",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "validBefore",
+            "type": "uint256"
+          }
+        ],
+        "internalType": "struct P2FluxGasSponsor.PermitSponsorship",
+        "name": "sponsorship",
+        "type": "tuple"
       },
       {
         "internalType": "uint8",
@@ -279,16 +303,6 @@
         "internalType": "bytes32",
         "name": "permitS",
         "type": "bytes32"
-      },
-      {
-        "internalType": "uint256",
-        "name": "networkFee",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "validBefore",
-        "type": "uint256"
       },
       {
         "internalType": "uint8",

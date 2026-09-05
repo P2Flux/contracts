@@ -37,10 +37,10 @@ interface IERC3009 {
 ///      changing any of them makes the signature unusable rather than merely wrong. The token
 ///      enforces single use of that nonce, and `validBefore` is the quote's expiry.
 ///
-///      Not upgradeable, no owner, no pause, no withdrawal path. The contract's token balance is
-///      zero before and after every call: it holds value only between two statements of one
-///      transaction, and `MAX_NETWORK_FEE_HARD_CAP` bounds what any signature can ever move beyond
-///      the payment itself.
+///      Not upgradeable, no owner, no pause, no withdrawal path. The contract holds value only
+///      between two statements of one transaction and leaves no more than it found, so anything sent
+///      here by anyone else is inert rather than reachable - and cannot stop the contract working.
+///      `MAX_NETWORK_FEE_HARD_CAP` bounds what any signature can ever move beyond the payment itself.
 contract P2FluxSponsoredSplitter is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -214,6 +214,14 @@ contract P2FluxSponsoredSplitter is ReentrancyGuard {
         if (processedPayments[id]) revert PaymentAlreadyProcessed(id);
         processedPayments[id] = true;
 
+        /* What this contract held before it was asked to do anything.
+         *
+         * Anyone may transfer tokens to any address, so a contract that asserted a zero balance
+         * would be one cheap dust transfer away from refusing every payment forever - and with no
+         * owner, no pause and no sweep, forever means forever. What must hold is that this call
+         * leaves no MORE than it found: donated dust sits inert instead of taking the product down. */
+        uint256 heldBefore = IERC20(supportedToken).balanceOf(address(this));
+
         // The buyer's one signature. The token verifies it against its own EIP-712 domain, checks
         // `to == msg.sender == this`, enforces the deadline, and burns the nonce.
         IERC3009(supportedToken).receiveWithAuthorization(
@@ -236,9 +244,9 @@ contract P2FluxSponsoredSplitter is ReentrancyGuard {
         if (revenue > 0) token.safeTransfer(feeWallet, revenue);
         if (p.networkFee > 0) token.safeTransfer(gasTreasury, p.networkFee);
 
-        // Custody lasted three statements. Anything left would mean the arithmetic above drifted
-        // from the amount pulled, and this contract has no way to ever move it out again.
-        if (token.balanceOf(address(this)) != 0) revert ResidualBalance();
+        // Custody lasted three statements. Anything left OVER would mean the arithmetic above
+        // drifted from the amount pulled, and this contract has no way to ever move it out again.
+        if (token.balanceOf(address(this)) != heldBefore) revert ResidualBalance();
 
         emit SponsoredPaid(p.ref, p.recipient, p.payer, p.amount - fee, fee, p.networkFee, GAS_SERVICE_FEE);
         emit PaymentSettled(id);

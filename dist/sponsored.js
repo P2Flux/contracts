@@ -39,7 +39,6 @@ export const sponsoredPaymentNonce = (args) => keccak256(encodeAbiParameters([
     args.serviceFee,
     args.payment.validBefore,
 ]));
-/** The fee-authorization nonce a permit sponsorship's terms produce. */
 export const sponsorPermitNonce = (args) => keccak256(encodeAbiParameters([
     { type: 'bytes32' },
     { type: 'uint256' },
@@ -170,15 +169,21 @@ export const gasSponsorAbi = [
         name: 'sponsorPermit',
         stateMutability: 'nonpayable',
         inputs: [
-            { name: 'payer', type: 'address' },
-            { name: 'spender', type: 'address' },
-            { name: 'allowanceValue', type: 'uint256' },
-            { name: 'allowanceDeadline', type: 'uint256' },
+            {
+                name: 'sponsorship',
+                type: 'tuple',
+                components: [
+                    { name: 'payer', type: 'address' },
+                    { name: 'spender', type: 'address' },
+                    { name: 'allowanceValue', type: 'uint256' },
+                    { name: 'allowanceDeadline', type: 'uint256' },
+                    { name: 'networkFee', type: 'uint256' },
+                    { name: 'validBefore', type: 'uint256' },
+                ],
+            },
             { name: 'permitV', type: 'uint8' },
             { name: 'permitR', type: 'bytes32' },
             { name: 'permitS', type: 'bytes32' },
-            { name: 'networkFee', type: 'uint256' },
-            { name: 'validBefore', type: 'uint256' },
             { name: 'feeV', type: 'uint8' },
             { name: 'feeR', type: 'bytes32' },
             { name: 'feeS', type: 'bytes32' },
@@ -190,12 +195,18 @@ export const gasSponsorAbi = [
         name: 'authorizationNonce',
         stateMutability: 'view',
         inputs: [
-            { name: 'payer', type: 'address' },
-            { name: 'spender', type: 'address' },
-            { name: 'allowanceValue', type: 'uint256' },
-            { name: 'allowanceDeadline', type: 'uint256' },
-            { name: 'networkFee', type: 'uint256' },
-            { name: 'validBefore', type: 'uint256' },
+            {
+                name: 'sponsorship',
+                type: 'tuple',
+                components: [
+                    { name: 'payer', type: 'address' },
+                    { name: 'spender', type: 'address' },
+                    { name: 'allowanceValue', type: 'uint256' },
+                    { name: 'allowanceDeadline', type: 'uint256' },
+                    { name: 'networkFee', type: 'uint256' },
+                    { name: 'validBefore', type: 'uint256' },
+                ],
+            },
         ],
         outputs: [{ type: 'bytes32' }],
     },
