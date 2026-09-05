@@ -46,7 +46,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@p2flux/contracts": "github:P2Flux/contracts#f3666d42cb58bb8e55cb5b0901c3713e24eaeabb",
     "viem": "^2.21.0"
   },
   "devDependencies": {
