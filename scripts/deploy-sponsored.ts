@@ -90,9 +90,10 @@ const relayer = privateKeyToAccount(need('RELAYER_PK') as Hex).address
  * them in the contracts rather than in the API's own table. 0.25 USDC at 6 decimals; the API's
  * SPONSOR_HARD_CAP must agree, and its startup check reads these back to prove it does. */
 const HARD_CAP = BigInt(process.env.SPONSOR_HARD_CAP_UNITS || '250000')
-/* The flat P2Flux fee for the gas service on a ONE-TIME payment. Subscriptions pay none: they
- * already carry a fixed execution fee on every collection. 0.10 USDC. */
-const GAS_SERVICE_FEE = BigInt(process.env.GAS_SERVICE_FEE_UNITS || '100000')
+/* The fixed network fee on a ONE-TIME payment, 0.10 USDC. MERCHANT-funded, out of the amount, and
+ * paid to the gas treasury - the same quantity and destination as the recurring contract's
+ * NETWORK_FEE. It is never added to what the buyer is debited. Subscriptions carry their own. */
+const FIXED_NETWORK_FEE = BigInt(process.env.FIXED_NETWORK_FEE_UNITS || '100000')
 
 if (manifest) {
   if (manifest.CHAIN_ID !== String(expectedChain)) throw new Error(`manifest is for chain ${manifest.CHAIN_ID}, CHAIN_ID is ${expectedChain}`)
@@ -112,7 +113,7 @@ console.log('feeWallet   ', feeWallet)
 console.log('gasTreasury ', gasTreasury)
 console.log('relayer     ', relayer, '(from RELAYER_PK)')
 console.log('hard cap    ', formatUnits(HARD_CAP, 6), 'USDC per sponsored operation')
-console.log('service fee ', formatUnits(GAS_SERVICE_FEE, 6), 'USDC, one-time payments only')
+console.log('fixed fee   ', formatUnits(FIXED_NETWORK_FEE, 6), 'USDC, merchant-funded, one-time only')
 
 if (balance === 0n) throw new Error('deployer has no ETH on this chain')
 
@@ -138,14 +139,31 @@ const deploy = async (name: string, args: unknown[]) => {
   return receipt
 }
 
-const splitter = await deploy('P2FluxSponsoredSplitter', [token, feeWallet, gasTreasury, relayer, GAS_SERVICE_FEE, HARD_CAP])
-const sponsor = await deploy('P2FluxGasSponsor', [token, gasTreasury, relayer, HARD_CAP])
+/* Either, or both.
+ *
+ * The two are independent contracts that happen to be introduced together, and a correction to one
+ * is not a reason to replace the other: a redeployed gas sponsor would strand every allowance
+ * signature made against the old address for no benefit. `DEPLOY_ONLY=splitter` (or `sponsor`)
+ * deploys the one named and leaves the other alone. */
+const only = process.env.DEPLOY_ONLY
+if (only && only !== 'splitter' && only !== 'sponsor') {
+  throw new Error("DEPLOY_ONLY must be 'splitter' or 'sponsor' when set")
+}
+const splitter =
+  only === 'sponsor'
+    ? null
+    : await deploy('P2FluxSponsoredSplitter', [token, feeWallet, gasTreasury, relayer, FIXED_NETWORK_FEE, HARD_CAP])
+const sponsor = only === 'splitter' ? null : await deploy('P2FluxGasSponsor', [token, gasTreasury, relayer, HARD_CAP])
 
 console.log('')
-console.log('SPONSORED_SPLITTER_ADDRESS=' + splitter.contractAddress)
-console.log('SPONSORED_SPLITTER_DEPLOY_BLOCK=' + splitter.blockNumber.toString())
-console.log('GAS_SPONSOR_ADDRESS=' + sponsor.contractAddress)
+if (splitter) {
+  console.log('SPONSORED_SPLITTER_ADDRESS=' + splitter.contractAddress)
+  console.log('SPONSORED_SPLITTER_DEPLOY_BLOCK=' + splitter.blockNumber.toString())
+}
+if (sponsor) {
+  console.log('GAS_SPONSOR_ADDRESS=' + sponsor.contractAddress)
 /* Recovery does not search the sponsor - it settles allowances, not payments - but an operator
  * reconciling a sponsorship needs a floor to start from, and finding it later means a log scan. */
-console.log('GAS_SPONSOR_DEPLOY_BLOCK=' + sponsor.blockNumber.toString())
+  console.log('GAS_SPONSOR_DEPLOY_BLOCK=' + sponsor.blockNumber.toString())
+}
 console.log('SPONSOR_HARD_CAP=' + formatUnits(HARD_CAP, 6))
