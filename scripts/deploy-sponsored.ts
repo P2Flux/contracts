@@ -119,7 +119,14 @@ if (balance === 0n) throw new Error('deployer has no ETH on this chain')
 const wallet = createWalletClient({ account: deployer, chain: viemChain, transport: http(rpc) })
 
 const deploy = async (name: string, args: unknown[]) => {
-  const nonce = await chain.getTransactionCount({ address: deployer.address })
+  /* `pending`, not the default `latest`.
+   *
+   * The second deployment of a pair is predicted while the first is a block old at most, and a node
+   * answering from the latest block hands back the nonce the first one already used - so the line
+   * below announced an address that was never going to be created. Harmless as logging and useless
+   * as a check, which is worse than either: an operator comparing this line against the receipt
+   * would have found a mismatch and had no idea which number to believe. */
+  const nonce = await chain.getTransactionCount({ address: deployer.address, blockTag: 'pending' })
   console.log('')
   console.log(name, 'will create', getContractAddress({ from: deployer.address, nonce: BigInt(nonce) }), `(nonce ${nonce})`)
   const built = artifact(name)
@@ -138,4 +145,7 @@ console.log('')
 console.log('SPONSORED_SPLITTER_ADDRESS=' + splitter.contractAddress)
 console.log('SPONSORED_SPLITTER_DEPLOY_BLOCK=' + splitter.blockNumber.toString())
 console.log('GAS_SPONSOR_ADDRESS=' + sponsor.contractAddress)
+/* Recovery does not search the sponsor - it settles allowances, not payments - but an operator
+ * reconciling a sponsorship needs a floor to start from, and finding it later means a log scan. */
+console.log('GAS_SPONSOR_DEPLOY_BLOCK=' + sponsor.blockNumber.toString())
 console.log('SPONSOR_HARD_CAP=' + formatUnits(HARD_CAP, 6))
