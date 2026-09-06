@@ -23,6 +23,20 @@ export declare const BASE_MAINNET: {
     readonly splitterDeployBlock: 50362015;
     /** P2FluxRecurring, deployed 2026-08-23 (tx 0xf849fd1d...ba5ce), Sourcify exact_match. */
     readonly recurring: "0xb415A9910Ef627e3bEF10F5Cb9DC92a3271e0975";
+    /**
+     * P2FluxSponsoredSplitter, deployed 2026-09-06 from manifest sha256 827b76fa…b2034
+     * (tx 0xb203550c...b1f5, deployer nonce 2). One-time payments whose network fee the buyer pays in
+     * USDC; the relayer sends the transaction. Immutables read back and verified against the manifest.
+     */
+    readonly sponsoredSplitter: "0x95E18ec05D4282acB3aab7aD60325bA4EEeEa8df";
+    /** The block the sponsored splitter deployed in - the floor for sponsored payment-recovery searches. */
+    readonly sponsoredSplitterDeployBlock: 50966621;
+    /**
+     * P2FluxGasSponsor, deployed 2026-09-06 from the same manifest (tx 0x7d8031bf...3bf5, deployer
+     * nonce 3). Subscription signup, allowance restore and allowance removal for a customer holding no ETH.
+     */
+    readonly gasSponsor: "0xD1DDAaa301403d18fD4A23Fc69493ef48af90285";
+    readonly gasSponsorDeployBlock: 50966742;
     readonly explorer: "https://basescan.org";
 };
 /** The chains this protocol is deployed to, by id. */
@@ -43,6 +57,20 @@ export declare const CHAINS: {
         readonly splitterDeployBlock: 50362015;
         /** P2FluxRecurring, deployed 2026-08-23 (tx 0xf849fd1d...ba5ce), Sourcify exact_match. */
         readonly recurring: "0xb415A9910Ef627e3bEF10F5Cb9DC92a3271e0975";
+        /**
+         * P2FluxSponsoredSplitter, deployed 2026-09-06 from manifest sha256 827b76fa…b2034
+         * (tx 0xb203550c...b1f5, deployer nonce 2). One-time payments whose network fee the buyer pays in
+         * USDC; the relayer sends the transaction. Immutables read back and verified against the manifest.
+         */
+        readonly sponsoredSplitter: "0x95E18ec05D4282acB3aab7aD60325bA4EEeEa8df";
+        /** The block the sponsored splitter deployed in - the floor for sponsored payment-recovery searches. */
+        readonly sponsoredSplitterDeployBlock: 50966621;
+        /**
+         * P2FluxGasSponsor, deployed 2026-09-06 from the same manifest (tx 0x7d8031bf...3bf5, deployer
+         * nonce 3). Subscription signup, allowance restore and allowance removal for a customer holding no ETH.
+         */
+        readonly gasSponsor: "0xD1DDAaa301403d18fD4A23Fc69493ef48af90285";
+        readonly gasSponsorDeployBlock: 50966742;
         readonly explorer: "https://basescan.org";
     };
 };

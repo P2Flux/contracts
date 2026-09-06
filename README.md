@@ -60,7 +60,15 @@ Constants for both networks live in `src/addresses.ts`.
 |---|---|---|
 | P2FluxSplitter | `0x5A3bD0945cd0C80B124870881dE49a717D20E0D0` | [Sourcify exact_match](https://repo.sourcify.dev/8453/0x5A3bD0945cd0C80B124870881dE49a717D20E0D0) · [BaseScan](https://basescan.org/address/0x5A3bD0945cd0C80B124870881dE49a717D20E0D0) |
 | P2FluxRecurring | `0xb415A9910Ef627e3bEF10F5Cb9DC92a3271e0975` | [Sourcify exact_match](https://repo.sourcify.dev/8453/0xb415A9910Ef627e3bEF10F5Cb9DC92a3271e0975) · [BaseScan](https://basescan.org/address/0xb415A9910Ef627e3bEF10F5Cb9DC92a3271e0975) |
+| P2FluxSponsoredSplitter | `0x95E18ec05D4282acB3aab7aD60325bA4EEeEa8df` | deployed 2026-09-06 from manifest `827b76fa…b2034` (block 50966621) · [BaseScan](https://basescan.org/address/0x95E18ec05D4282acB3aab7aD60325bA4EEeEa8df) · [Sourcify](https://repo.sourcify.dev/8453/0x95E18ec05D4282acB3aab7aD60325bA4EEeEa8df) |
+| P2FluxGasSponsor | `0xD1DDAaa301403d18fD4A23Fc69493ef48af90285` | deployed 2026-09-06 from the same manifest (block 50966742) · [BaseScan](https://basescan.org/address/0xD1DDAaa301403d18fD4A23Fc69493ef48af90285) · [Sourcify](https://repo.sourcify.dev/8453/0xD1DDAaa301403d18fD4A23Fc69493ef48af90285) |
 | USDC (Circle, native) | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | canonical |
+
+The sponsored pair lets a buyer holding USDC and no ETH pay, start a subscription, or repair or remove
+an allowance by signing: the buyer pays the network fee in USDC, the P2Flux relayer pays the Base gas.
+Both contracts are relayer-only and immutable; `P2FluxSponsoredSplitter` charges the same 1% and the
+merchant-funded 0.10 USDC fixed network fee as the native path, with a 0.25 USDC hard cap on any
+single sponsored fee. Sepolia: `0x876f7b98e8c06291ec916a3223a92038b0a8774f` / `0x2dc51643040d7c396f1199a0664ac095d4b89ec5`.
 
 Base Sepolia (chainId 84532) remains the test deployment. Deployment tooling that signs with
 a live key is deliberately not here — it belongs with the operator, in the private infrastructure.
