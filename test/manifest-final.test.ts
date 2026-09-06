@@ -68,7 +68,8 @@ test('environment can never silently define an immutable value; wrong deployer/r
   // The deploy script derives the deployer from DEPLOYER_PK and checks it against the manifest.
   const src = readFileSync(new URL('../scripts/deploy-sponsored.ts', import.meta.url), 'utf8')
   assert.match(src, /DEPLOYER_PK does not derive to the manifest DEPLOYER/)
-  assert.match(src, /Base Mainnet is not supported yet/, 'hard-disabled')
+  assert.match(src, /Base Mainnet deploys only from an approved manifest/, 'Mainnet is manifest-only')
+  assert.doesNotMatch(src, /Base Mainnet is not supported yet/)
   assert.throws(() => assertPredicted(exp(2), DEPLOYER, 5, 'x'), /would be created at/)
   assert.throws(() => assertImmutables('x', { relayer: RELAYER }, { relayer: ADMIN }), /relayer is/)
 })

@@ -59,15 +59,10 @@ const deployerKey = process.env.DEPLOYER_PK || process.env.ADMIN_PK
 if (!deployerKey) throw new Error('DEPLOYER_PK (or ADMIN_PK) is required')
 const deployer = privateKeyToAccount(deployerKey as Hex)
 
-/* Mainnet is refused here rather than merely gated on a manifest.
- *
- * A Mainnet deployment of these two must name them in the approved manifest - expected addresses
- * and every constructor argument - the way the recurring contract and the splitter are named, and
- * the manifest has no such fields yet. Until it does there is no approved artefact to check a
- * Mainnet deployment against, and a deployment nobody can check is exactly what the manifest exists
- * to prevent. The capability table refuses the mode on Mainnet for the same reason. */
-if (expectedChain === base.id) {
-  throw new Error('Base Mainnet is not supported yet: add the sponsored contracts to the deploy manifest first')
+/* Mainnet deploys from the approved manifest and from nothing else. Without one there is no
+ * approved artefact to check the deployment against, so there is no deployment. */
+if (expectedChain === base.id && !manifest) {
+  throw new Error('Base Mainnet deploys only from an approved manifest: set DEPLOY_MANIFEST')
 }
 
 /* ONE source. With a manifest it is the manifest's sponsored group - every constructor argument and
@@ -116,6 +111,24 @@ console.log('hard cap    ', formatUnits(HARD_CAP, 6), 'USDC per sponsored operat
 console.log('fixed fee   ', formatUnits(FIXED_NETWORK_FEE, 6), 'USDC, merchant-funded, one-time only')
 
 if (balance === 0n) throw new Error('deployer has no ETH on this chain')
+
+/* DRY_RUN=1 performs every check a real run performs - manifest, chain, deployer identity, token
+ * code, balance, and the predicted address of BOTH contracts from the pending nonce - then stops.
+ * It signs nothing: the rehearsal before a Mainnet run, and the proof that the checks hold. */
+if (process.env.DRY_RUN === '1') {
+  const nonce = await chain.getTransactionCount({ address: deployer.address, blockTag: 'pending' })
+  console.log('')
+  console.log('DRY_RUN: deployer nonce (pending)', nonce)
+  if (plan.expected) {
+    assertPredicted(plan.expected.splitter, deployer.address, nonce, 'P2FluxSponsoredSplitter')
+    assertPredicted(plan.expected.sponsor, deployer.address, nonce + 1, 'P2FluxGasSponsor')
+    console.log('DRY_RUN: P2FluxSponsoredSplitter would be created at', plan.expected.splitter, `(nonce ${nonce}) - matches manifest`)
+    console.log('DRY_RUN: P2FluxGasSponsor would be created at', plan.expected.sponsor, `(nonce ${nonce + 1}) - matches manifest`)
+  }
+  if (manifest) console.log('DRY_RUN: manifest sha256', manifest.sha256)
+  console.log('DRY_RUN: nothing sent')
+  process.exit(0)
+}
 
 const wallet = createWalletClient({ account: deployer, chain: viemChain, transport: http(rpc) })
 

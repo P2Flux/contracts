@@ -122,8 +122,11 @@ test('an immutable read back from the chain that disagrees with the manifest is 
   assert.throws(() => assertImmutables('x', want, { ...want, supportedToken: '0x036CbD53842c5426634e7929541eC2318f3dCF7e' }), /supportedToken/)
 })
 
-test('the Mainnet refusal in the deploy script is still in place', async () => {
+test('the deploy script refuses Mainnet without a manifest; the rehearsal exits before any wallet exists', async () => {
   const { readFileSync } = await import('node:fs')
   const src = readFileSync(new URL('../scripts/deploy-sponsored.ts', import.meta.url), 'utf8')
-  assert.match(src, /Base Mainnet is not supported yet/)
+  assert.doesNotMatch(src, /Base Mainnet is not supported yet/)
+  assert.match(src, /expectedChain === base\.id && !manifest/)
+  assert.match(src, /Base Mainnet deploys only from an approved manifest/)
+  assert.ok(src.indexOf("process.env.DRY_RUN === '1'") < src.indexOf('createWalletClient({ account: deployer'))
 })
