@@ -22,7 +22,8 @@ import { createPublicClient, createWalletClient, formatEther, formatUnits, http,
 import { privateKeyToAccount } from 'viem/accounts'
 import { base, baseSepolia } from 'viem/chains'
 import { getContractAddress } from 'viem'
-import { addr, loadManifest } from './manifest.js'
+import { loadManifest } from './manifest.js'
+import { assertImmutables, assertPredicted, planFromManifest } from './sponsored-manifest.js'
 
 /* Mainnet deploys from an approved manifest and from NOTHING else - see deploy.ts and manifest.ts. */
 const manifest = process.env.DEPLOY_MANIFEST ? loadManifest() : null
@@ -69,44 +70,30 @@ if (expectedChain === base.id) {
   throw new Error('Base Mainnet is not supported yet: add the sponsored contracts to the deploy manifest first')
 }
 
-const feeWallet: Address = manifest ? addr(manifest.SPLITTER_CONSTRUCTOR_ARG_2_FEE_WALLET) : (need('FEE_WALLET') as Address)
-const gasTreasury: Address = manifest
-  ? addr(manifest.RECURRING_CONSTRUCTOR_ARG_4_GAS_TREASURY)
-  : (need('GAS_TREASURY') as Address)
-const token: Address = manifest
-  ? addr(manifest.SPLITTER_CONSTRUCTOR_ARG_1_SUPPORTED_TOKEN)
-  : ((process.env.USDC_ADDRESS ||
-      (expectedChain === base.id
-        ? '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
-        : '0x036CbD53842c5426634e7929541eC2318f3dCF7e')) as Address)
-
-/* The relayer is the only address either contract will ever accept a call from, and there is no
- * setter. With a manifest, the approved RELAYER line is the authority and the relayer's key is not
- * wanted on the deploy machine at all; if RELAYER_PK is present anyway it is checked against the
- * manifest, never allowed to define the address. Without a manifest (testnet), the key that the API
- * actually signs with is the source, because a relayer address that does not match the running
- * relayer is a pair of dead contracts. */
-const relayer: Address = (() => {
-  if (!manifest) return privateKeyToAccount(need('RELAYER_PK') as Hex).address
-  const expected = addr(manifest.RELAYER)
-  if (addr(manifest.RECURRING_CONSTRUCTOR_ARG_2_RELAYER).toLowerCase() !== expected.toLowerCase()) {
-    throw new Error('manifest RELAYER and RECURRING_CONSTRUCTOR_ARG_2_RELAYER disagree')
-  }
-  if (process.env.RELAYER_PK && privateKeyToAccount(process.env.RELAYER_PK as Hex).address.toLowerCase() !== expected.toLowerCase()) {
-    throw new Error('RELAYER_PK does not derive to the manifest RELAYER')
-  }
-  return expected
-})()
-
-/* The two immutable ceilings. They bound what any single signature can ever move on top of what it
- * is paying for, and no configuration can raise them afterwards - which is the point of putting
- * them in the contracts rather than in the API's own table. 0.25 USDC at 6 decimals; the API's
- * SPONSOR_HARD_CAP must agree, and its startup check reads these back to prove it does. */
-const HARD_CAP = BigInt(process.env.SPONSOR_HARD_CAP_UNITS || '250000')
-/* The fixed network fee on a ONE-TIME payment, 0.10 USDC. MERCHANT-funded, out of the amount, and
- * paid to the gas treasury - the same quantity and destination as the recurring contract's
- * NETWORK_FEE. It is never added to what the buyer is debited. Subscriptions carry their own. */
-const FIXED_NETWORK_FEE = BigInt(process.env.FIXED_NETWORK_FEE_UNITS || '100000')
+/* ONE source. With a manifest it is the manifest's sponsored group - every constructor argument and
+ * both expected addresses - and anything the environment says is checked against it, never used.
+ * Without one (testnet) the environment is the source, as it always was. */
+const plan = manifest
+  ? planFromManifest(manifest, process.env)
+  : {
+      token: (process.env.USDC_ADDRESS ||
+        (expectedChain === base.id
+          ? '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
+          : '0x036CbD53842c5426634e7929541eC2318f3dCF7e')) as Address,
+      feeWallet: need('FEE_WALLET') as Address,
+      gasTreasury: need('GAS_TREASURY') as Address,
+      /* The relayer is the only address either contract will ever accept a call from, and there is
+       * no setter. On testnet the key the API actually signs with is the source, because a relayer
+       * address that does not match the running relayer is a pair of dead contracts. */
+      relayer: privateKeyToAccount(need('RELAYER_PK') as Hex).address,
+      /* The fixed network fee on a ONE-TIME payment, 0.10 USDC: MERCHANT-funded, out of the amount,
+       * paid to the gas treasury. Never added to what the buyer is debited. And the immutable ceiling
+       * on what any single signature can move on top of what it pays for: 0.25 USDC. */
+      fixedNetworkFee: BigInt(process.env.FIXED_NETWORK_FEE_UNITS || '100000'),
+      hardCap: BigInt(process.env.SPONSOR_HARD_CAP_UNITS || '250000'),
+      expected: null,
+    }
+const { token, feeWallet, gasTreasury, relayer, fixedNetworkFee: FIXED_NETWORK_FEE, hardCap: HARD_CAP } = plan
 
 if (manifest) {
   if (manifest.CHAIN_ID !== String(expectedChain)) throw new Error(`manifest is for chain ${manifest.CHAIN_ID}, CHAIN_ID is ${expectedChain}`)
@@ -132,7 +119,7 @@ if (balance === 0n) throw new Error('deployer has no ETH on this chain')
 
 const wallet = createWalletClient({ account: deployer, chain: viemChain, transport: http(rpc) })
 
-const deploy = async (name: string, args: unknown[]) => {
+const deploy = async (name: string, args: unknown[], expected: Address | null) => {
   /* `pending`, not the default `latest`.
    *
    * The second deployment of a pair is predicted while the first is a block old at most, and a node
@@ -142,14 +129,33 @@ const deploy = async (name: string, args: unknown[]) => {
    * would have found a mismatch and had no idea which number to believe. */
   const nonce = await chain.getTransactionCount({ address: deployer.address, blockTag: 'pending' })
   console.log('')
-  console.log(name, 'will create', getContractAddress({ from: deployer.address, nonce: BigInt(nonce) }), `(nonce ${nonce})`)
+  const willCreate = expected
+    ? assertPredicted(expected, deployer.address, nonce, name)
+    : getContractAddress({ from: deployer.address, nonce: BigInt(nonce) })
+  console.log(name, 'will create', willCreate, `(nonce ${nonce})`, expected ? '(matches manifest)' : '')
   const built = artifact(name)
   const hash = await wallet.deployContract({ abi: built.abi as never, bytecode: built.bytecode, args })
   console.log('tx          ', hash)
   const receipt = await chain.waitForTransactionReceipt({ hash })
   if (receipt.status !== 'success' || !receipt.contractAddress) throw new Error(`${name} deployment failed`)
   console.log('gas used    ', receipt.gasUsed.toString())
+  if (expected && receipt.contractAddress.toLowerCase() !== expected.toLowerCase()) {
+    throw new Error(`${name} was created at ${receipt.contractAddress}, the manifest expects ${expected}`)
+  }
   return receipt
+}
+
+/* What the chain now holds, read back and compared to what was approved - immutable by immutable.
+ * Deployment gas is already spent by this point; the check exists so a wrong contract is never
+ * quietly configured into an API. */
+const readBack = async (name: string, address: Address, fields: Record<string, string | bigint>) => {
+  const built = artifact(name)
+  const read: Record<string, unknown> = {}
+  for (const fn of Object.keys(fields)) {
+    read[fn] = await chain.readContract({ address, abi: built.abi as never, functionName: fn })
+  }
+  assertImmutables(name, fields, read)
+  console.log(name, 'immutables verified against the plan')
 }
 
 /* Either, or both.
@@ -165,8 +171,16 @@ if (only && only !== 'splitter' && only !== 'sponsor') {
 const splitter =
   only === 'sponsor'
     ? null
-    : await deploy('P2FluxSponsoredSplitter', [token, feeWallet, gasTreasury, relayer, FIXED_NETWORK_FEE, HARD_CAP])
-const sponsor = only === 'splitter' ? null : await deploy('P2FluxGasSponsor', [token, gasTreasury, relayer, HARD_CAP])
+    : await deploy('P2FluxSponsoredSplitter', [token, feeWallet, gasTreasury, relayer, FIXED_NETWORK_FEE, HARD_CAP], plan.expected?.splitter ?? null)
+if (splitter) {
+  await readBack('P2FluxSponsoredSplitter', splitter.contractAddress!, {
+    supportedToken: token, feeWallet, gasTreasury, relayer, FIXED_NETWORK_FEE, MAX_NETWORK_FEE_HARD_CAP: HARD_CAP, ONE_TIME_BPS: 100n,
+  })
+}
+const sponsor = only === 'splitter' ? null : await deploy('P2FluxGasSponsor', [token, gasTreasury, relayer, HARD_CAP], plan.expected?.sponsor ?? null)
+if (sponsor) {
+  await readBack('P2FluxGasSponsor', sponsor.contractAddress!, { supportedToken: token, gasTreasury, relayer, MAX_SPONSOR_FEE_HARD_CAP: HARD_CAP })
+}
 
 console.log('')
 if (splitter) {
