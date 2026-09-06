@@ -81,9 +81,22 @@ const token: Address = manifest
         : '0x036CbD53842c5426634e7929541eC2318f3dCF7e')) as Address)
 
 /* The relayer is the only address either contract will ever accept a call from, and there is no
- * setter. Derived from the key the API actually signs with rather than typed separately, because a
- * relayer address that does not match the running relayer is a pair of dead contracts. */
-const relayer = privateKeyToAccount(need('RELAYER_PK') as Hex).address
+ * setter. With a manifest, the approved RELAYER line is the authority and the relayer's key is not
+ * wanted on the deploy machine at all; if RELAYER_PK is present anyway it is checked against the
+ * manifest, never allowed to define the address. Without a manifest (testnet), the key that the API
+ * actually signs with is the source, because a relayer address that does not match the running
+ * relayer is a pair of dead contracts. */
+const relayer: Address = (() => {
+  if (!manifest) return privateKeyToAccount(need('RELAYER_PK') as Hex).address
+  const expected = addr(manifest.RELAYER)
+  if (addr(manifest.RECURRING_CONSTRUCTOR_ARG_2_RELAYER).toLowerCase() !== expected.toLowerCase()) {
+    throw new Error('manifest RELAYER and RECURRING_CONSTRUCTOR_ARG_2_RELAYER disagree')
+  }
+  if (process.env.RELAYER_PK && privateKeyToAccount(process.env.RELAYER_PK as Hex).address.toLowerCase() !== expected.toLowerCase()) {
+    throw new Error('RELAYER_PK does not derive to the manifest RELAYER')
+  }
+  return expected
+})()
 
 /* The two immutable ceilings. They bound what any single signature can ever move on top of what it
  * is paying for, and no configuration can raise them afterwards - which is the point of putting
@@ -111,7 +124,7 @@ console.log('deployer    ', deployer.address, formatEther(balance), 'ETH')
 console.log('token       ', token)
 console.log('feeWallet   ', feeWallet)
 console.log('gasTreasury ', gasTreasury)
-console.log('relayer     ', relayer, '(from RELAYER_PK)')
+console.log('relayer     ', relayer, manifest ? '(from manifest)' : '(from RELAYER_PK)')
 console.log('hard cap    ', formatUnits(HARD_CAP, 6), 'USDC per sponsored operation')
 console.log('fixed fee   ', formatUnits(FIXED_NETWORK_FEE, 6), 'USDC, merchant-funded, one-time only')
 
