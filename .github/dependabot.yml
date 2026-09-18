@@ -1,0 +1,17 @@
+# Dependabot version updates are free on every GitHub plan. Monthly and capped, so this is a nudge
+# rather than a stream of pull requests.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    ignore:
+      # The deployed, source-verified bytecode was built with exactly this compiler.
+      - dependency-name: solc
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2

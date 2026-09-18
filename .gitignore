@@ -1,2 +1,5 @@
 node_modules/
 out/
+lib/
+forge-out/
+forge-cache/

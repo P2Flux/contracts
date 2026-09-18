@@ -1,0 +1,80 @@
+[
+ {
+  "id": "200f9a935a69a81aa537fdeaa1504011771c2969b203d66afea2585764d0606b",
+  "check": "arbitrary-send-erc20",
+  "impact": "High",
+  "first_line": "P2FluxRecurring.charge(P2FluxRecurring.RecurringAuthorization,bytes,uint256) (contracts/P2FluxRecurring.sol#240-288) uses arbitrary from in transferFr"
+ },
+ {
+  "id": "2723573e63b5420eb20d61fd8d1fb1a389845cc56a6c0ce253dcbc34263e7615",
+  "check": "arbitrary-send-erc20",
+  "impact": "High",
+  "first_line": "P2FluxRecurring.charge(P2FluxRecurring.RecurringAuthorization,bytes,uint256) (contracts/P2FluxRecurring.sol#240-288) uses arbitrary from in transferFr"
+ },
+ {
+  "id": "f0f3ce66f40c2bc33f95341164817750051bfbba7b7a040be9315928509000a6",
+  "check": "arbitrary-send-erc20",
+  "impact": "High",
+  "first_line": "P2FluxRecurring.charge(P2FluxRecurring.RecurringAuthorization,bytes,uint256) (contracts/P2FluxRecurring.sol#240-288) uses arbitrary from in transferFr"
+ },
+ {
+  "id": "48b9d1b75078f32772e9362812a2b0208892b4db26a3412c8eb1caaf218be624",
+  "check": "reentrancy-balance",
+  "impact": "High",
+  "first_line": "Reentrancy in P2FluxGasSponsor.sponsorPermit(P2FluxGasSponsor.PermitSponsorship,uint8,bytes32,bytes32,uint8,bytes32,bytes32) (contracts/P2FluxGasSpons"
+ },
+ {
+  "id": "d07cd3147b8a997d63f9da52e43893cce0017b9436d611b0db49b30399f160b8",
+  "check": "reentrancy-balance",
+  "impact": "High",
+  "first_line": "Reentrancy in P2FluxSponsoredSplitter.payWithAuthorization(P2FluxSponsoredSplitter.SponsoredPayment,uint8,bytes32,bytes32) (contracts/P2FluxSponsoredS"
+ },
+ {
+  "id": "fe3b81d97bec657ac8290b02d162cc13a5879396c3c791d32dc5af526ce7d6d0",
+  "check": "reentrancy-balance",
+  "impact": "High",
+  "first_line": "Reentrancy in P2FluxGasSponsor.sponsorPermit(P2FluxGasSponsor.PermitSponsorship,uint8,bytes32,bytes32,uint8,bytes32,bytes32) (contracts/P2FluxGasSpons"
+ },
+ {
+  "id": "36b94f1b680b754ae5fd0d97077312feb2fa7d65b74af86cfc29a2c20303c989",
+  "check": "unused-return",
+  "impact": "Medium",
+  "first_line": "P2FluxRecurring._isAuthorized(address,bytes32,bytes) (contracts/P2FluxRecurring.sol#304-334) ignores return value by (recovered_scope_0,err_scope_1,No"
+ },
+ {
+  "id": "a16891dad83bbe3c76afdb866b1293f3aa659a5bed66cbf62b5f7c975a703a6e",
+  "check": "unused-return",
+  "impact": "Medium",
+  "first_line": "P2FluxRecurring._isAuthorized(address,bytes32,bytes) (contracts/P2FluxRecurring.sol#304-334) ignores return value by (recovered,err,None) = ECDSA.tryR"
+ },
+ {
+  "id": "ae6828c49e959c4b7d8e851f78585125facce9559732f36988e7d6f3b9360f6d",
+  "check": "reentrancy-events",
+  "impact": "Low",
+  "first_line": "Reentrancy in P2FluxSplitter.pay(address,address,uint256,bytes32) (contracts/P2FluxSplitter.sol#103-122):"
+ },
+ {
+  "id": "f1fbcf9d135da7f0e113c4c2d15958dd4d73c3c6c8b5b2b685e49cd7ed28a860",
+  "check": "reentrancy-events",
+  "impact": "Low",
+  "first_line": "Reentrancy in P2FluxSplitter.payWithPermit(address,address,uint256,bytes32,uint256,uint8,bytes32,bytes32) (contracts/P2FluxSplitter.sol#126-142):"
+ },
+ {
+  "id": "6a44c09a2a3a72359851a484c5de80d6eb547810e28101ebf385bb28cc93496d",
+  "check": "timestamp",
+  "impact": "Low",
+  "first_line": "P2FluxRecurring.charge(P2FluxRecurring.RecurringAuthorization,bytes,uint256) (contracts/P2FluxRecurring.sol#240-288) uses timestamp for comparisons"
+ },
+ {
+  "id": "771ed8812dc4f740c2972cac509bd803b65c456c6fedcbea01d7f312c38ae0cd",
+  "check": "timestamp",
+  "impact": "Low",
+  "first_line": "P2FluxRecurring.currentPeriod(P2FluxRecurring.RecurringAuthorization) (contracts/P2FluxRecurring.sol#209-214) uses timestamp for comparisons"
+ },
+ {
+  "id": "a873030c713526c21bffcfd75acce7d5dee614f8ecbbb42e722d3b3a9cd3aa7d",
+  "check": "timestamp",
+  "impact": "Low",
+  "first_line": "P2FluxRecurring.isChargeable(P2FluxRecurring.RecurringAuthorization) (contracts/P2FluxRecurring.sol#217-224) uses timestamp for comparisons"
+ }
+]

@@ -123,6 +123,7 @@ describe('P2FluxSplitter', () => {
     const receipt = await pay({ ref: ref('names-token') })
     const [paid] = parseEventLogs({ abi: splitterAbi, eventName: 'Paid', logs: receipt.logs })
 
+    assert.ok(paid, 'a Paid event was emitted')
     assert.equal(paid.args.token.toLowerCase(), h.token.toLowerCase())
     assert.equal(paid.args.net, NET)
     assert.equal(paid.args.fee, FEE)
@@ -138,6 +139,7 @@ describe('P2FluxSplitter', () => {
       amount: AMOUNT,
       reference: ref('id-binding'),
     })
+    assert.ok(settled, 'a PaymentSettled event was emitted')
     assert.equal(settled.args.paymentId.toLowerCase(), expected.toLowerCase())
 
     // The same terms in a different token are a different payment - which is what makes an id

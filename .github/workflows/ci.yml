@@ -1,0 +1,85 @@
+# Every push proves three things about the contracts: the deployment-facing TypeScript suite still
+# passes, randomised inputs still cannot break an economic invariant, and static analysis reports
+# nothing that has not already been reviewed.
+#
+# All of it runs on the free runners of a public repository, with free, open-source tools only.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  typescript:
+    name: typecheck · anvil suite · ABI sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # The TypeScript suite drives the contracts through a local anvil node.
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run abi:check
+
+  foundry:
+    name: fuzz · invariants
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+      - run: npm ci # OpenZeppelin comes from node_modules
+      # Untracked on purpose (see docs/security-analysis.md); pinned, so every run builds the same thing.
+      - run: forge install foundry-rs/forge-std@v1.9.7 --no-git
+      - run: forge fmt --check test/foundry
+      - run: forge test
+
+  slither:
+    name: static analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - run: forge install foundry-rs/forge-std@v1.9.7 --no-git
+      - run: pip install slither-analyzer==0.11.6
+      # Reviewed findings live in slither.db.json, by id. Anything NOT in there fails this job.
+      - run: slither .
+
+  audit:
+    name: dependency audit (runtime)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Runtime dependencies only. The one open dev-only advisory (tmp, via the pinned solc) is
+      # documented in docs/security-analysis.md and cannot be fixed without changing the compiler.
+      - run: npm audit --omit=dev --audit-level=high
