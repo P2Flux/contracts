@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const root = new URL('..', import.meta.url).pathname
-const PUBLISHED = ['P2FluxRecurring', 'P2FluxSplitter', 'P2FluxSponsoredSplitter', 'P2FluxGasSponsor']
+const PUBLISHED = ['P2FluxRecurring', 'P2FluxSplitter', 'P2FluxSponsoredSplitter', 'P2FluxGasSponsor', 'P2FluxX402Splitter']
 const check = process.argv.includes('--check')
 
 if (!existsSync(join(root, 'out'))) {

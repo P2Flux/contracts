@@ -35,6 +35,15 @@ export const erc20Abi = [
         inputs: [{ type: 'address' }],
         outputs: [{ type: 'uint256' }],
     },
+    /* EIP-3009: whether `nonce` of `authorizer` is already used. How the x402 facilitator refuses a
+     * replayed authorization before paying gas to find out on-chain. */
+    {
+        type: 'function',
+        name: 'authorizationState',
+        stateMutability: 'view',
+        inputs: [{ type: 'address' }, { type: 'bytes32' }],
+        outputs: [{ type: 'bool' }],
+    },
     { type: 'function', name: 'name', stateMutability: 'view', inputs: [], outputs: [{ type: 'string' }] },
     /* Asserted at startup: six decimals is baked into every amount this API parses, formats and signs,
      * so a token with any other precision mis-prices by orders of magnitude rather than a little. */

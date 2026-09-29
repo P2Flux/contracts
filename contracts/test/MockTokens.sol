@@ -202,8 +202,8 @@ contract AlwaysValidWallet {
 }
 
 /**
- * @notice A FiatToken-v2-shaped mock: EIP-2612 `permit` and EIP-3009
- *         `receiveWithAuthorization`, with the real domain, typehashes and nonce semantics.
+ * @notice A FiatToken-v2-shaped mock: EIP-2612 `permit` and EIP-3009 `receiveWithAuthorization`
+ *         and `transferWithAuthorization`, with the real domain, typehashes and nonce semantics.
  *
  * @dev The sponsored contracts lean on the token to enforce most of their security - signature
  *      validity, single use of a nonce, the deadline, and `to == msg.sender` - so a mock that only
@@ -214,6 +214,10 @@ contract MockFiatToken is MockUSDC {
         keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)");
     bytes32 public constant RECEIVE_WITH_AUTHORIZATION_TYPEHASH = keccak256(
         "ReceiveWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
+    );
+
+    bytes32 public constant TRANSFER_WITH_AUTHORIZATION_TYPEHASH = keccak256(
+        "TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
     );
 
     string public constant version = "2";
@@ -276,6 +280,52 @@ contract MockFiatToken is MockUSDC {
         authorizationState[from][nonce] = true;
         emit AuthorizationUsed(from, nonce);
         require(_move(from, to, value), "transfer failed");
+    }
+
+    /// @dev FiatToken v2.2's `bytes` overload, the one x402 settles through: an EOA's (r, s, v), or
+    ///      for a contract `from` whatever its ERC-1271 `isValidSignature` accepts. Anyone may submit
+    ///      it - unlike `receiveWithAuthorization` there is no `to == msg.sender` rule.
+    function transferWithAuthorization(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        bytes memory signature
+    ) external {
+        require(block.timestamp > validAfter, "authorization is not yet valid");
+        require(block.timestamp < validBefore, "authorization is expired");
+        require(!authorizationState[from][nonce], "authorization is used or canceled");
+
+        bytes32 digest = _digest(
+            keccak256(
+                abi.encode(TRANSFER_WITH_AUTHORIZATION_TYPEHASH, from, to, value, validAfter, validBefore, nonce)
+            )
+        );
+        require(_validSignature(from, digest, signature), "invalid authorization signature");
+
+        authorizationState[from][nonce] = true;
+        emit AuthorizationUsed(from, nonce);
+        require(_move(from, to, value), "transfer failed");
+    }
+
+    function _validSignature(address signer, bytes32 digest, bytes memory signature) private view returns (bool) {
+        if (signer.code.length > 0) {
+            (bool ok, bytes memory ret) =
+                signer.staticcall(abi.encodeWithSelector(bytes4(0x1626ba7e), digest, signature));
+            return ok && ret.length == 32 && abi.decode(ret, (bytes4)) == bytes4(0x1626ba7e);
+        }
+        require(signature.length == 65, "invalid signature length");
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+        assembly {
+            r := mload(add(signature, 32))
+            s := mload(add(signature, 64))
+            v := byte(0, mload(add(signature, 96)))
+        }
+        return _recover(digest, v, r, s) == signer;
     }
 
     function _digest(bytes32 structHash) private view returns (bytes32) {

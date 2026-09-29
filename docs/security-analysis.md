@@ -34,14 +34,23 @@ untracked — `test/hygiene.test.ts` reads every tracked path as a file, which a
 - **Revocation.** Only the payer can revoke; a revoked authorization is never charged again.
 - **Robustness.** Dust donated to a sponsored contract neither bricks it nor leaks; a failed permit
   rolls back the fee already pulled; a failed transfer leaves the intent payable.
+- **x402 settlement (`X402Splitter.t.sol`).** The agent signs a transfer to the seller's vault and
+  nothing else, so the relayer cannot redirect a payment to any other recipient, inflate the amount,
+  or take more than `max(1%, MIN_FEE)`, and never the whole amount. `upto` debits the amount used,
+  never the signed maximum, and only into this seller's vault. Money that reaches a vault outside a
+  settlement (an authorization submitted straight to USDC, a donation) is never used to pay a
+  settlement and can only be flushed to that vault's seller, by anyone. ERC-1271 payers settle like
+  EOAs. `X402SplitterFork.t.sol` repeats the settlements against the real Base Sepolia USDC
+  (FiatToken v2.2), Permit2 and x402 upto proxy (`BASE_SEPOLIA_RPC_URL=… forge test --match-contract
+  X402SplitterFork`; skipped in CI, which runs offline).
 
 The stateful suites drive random sequences (relayer and stranger charges, time jumps, revocations,
 replays, donations) against an independent ledger and compare after every call.
 
 ## Slither triage
 
-Reviewed 2026-09-18, Slither 0.11.6. All 13 findings are recorded by id in `slither.db.json`, so CI
-fails on anything new. None is a vulnerability:
+Reviewed 2026-09-18 and 2026-09-29 (x402), Slither 0.11.6. All 15 findings are recorded by id in
+`slither.db.json`, so CI fails on anything new. None is a vulnerability:
 
 | Detector | Where | Verdict |
 |---|---|---|
@@ -50,6 +59,8 @@ fails on anything new. None is a vulnerability:
 | `unused-return` ×2 | `P2FluxRecurring._isAuthorized` | **Informational.** The ignored value is `tryRecover`'s error argument; the error code itself is checked. |
 | `reentrancy-events` ×2 | `P2FluxSplitter.pay` | **Informational.** State is written before the token calls (checks-effects-interactions); the token is pinned. |
 | `timestamp` ×3 | `P2FluxRecurring` period logic | **Accepted.** Periods are hours to months; validator timestamp drift of seconds cannot move a charge across a period in any way that benefits anyone. |
+| `incorrect-equality` | `P2FluxX402Splitter.flush` | **False positive.** `balance == 0` only means "nothing to pay out". Anyone can make it false by sending the vault money, and the only effect is that the money is paid to that vault's seller. |
+| `missing-zero-check` | `P2FluxX402Vault` constructor | **False positive.** A vault is only ever deployed by the splitter, which refuses a zero recipient on both paths (`_open`, `flush`) before deploying. |
 
 The deployed contracts are immutable and source-verified, so findings are triaged in the database
 rather than with inline `slither-disable` comments: editing a verified source file, even a comment,

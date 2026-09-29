@@ -35,6 +35,10 @@
       "types": "./dist/splitter.d.ts",
       "default": "./dist/splitter.js"
     },
+    "./x402": {
+      "types": "./dist/x402.d.ts",
+      "default": "./dist/x402.js"
+    },
     "./artifacts/*": "./abi/*.json"
   },
   "scripts": {

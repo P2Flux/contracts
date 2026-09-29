@@ -57,6 +57,18 @@ export declare const erc20Abi: readonly [{
     }];
 }, {
     readonly type: "function";
+    readonly name: "authorizationState";
+    readonly stateMutability: "view";
+    readonly inputs: readonly [{
+        readonly type: "address";
+    }, {
+        readonly type: "bytes32";
+    }];
+    readonly outputs: readonly [{
+        readonly type: "bool";
+    }];
+}, {
+    readonly type: "function";
     readonly name: "name";
     readonly stateMutability: "view";
     readonly inputs: readonly [];

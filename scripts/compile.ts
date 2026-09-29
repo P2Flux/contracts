@@ -11,7 +11,9 @@ const CONTRACTS = [
   'P2FluxRecurring.sol',
   'P2FluxSponsoredSplitter.sol',
   'P2FluxGasSponsor.sol',
+  'P2FluxX402Splitter.sol',
   'test/MockTokens.sol',
+  'test/MockX402.sol',
 ]
 
 const sources: Record<string, { content: string }> = {}

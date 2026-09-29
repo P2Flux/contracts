@@ -47,6 +47,19 @@ abstract contract P2FluxTest is Test {
         (v, r, s) = vm.sign(key, keccak256(abi.encodePacked("\x19\x01", token.DOMAIN_SEPARATOR(), structHash)));
     }
 
+    /// @dev An x402 `exact` payment as the official client signs it: EIP-3009 TransferWithAuthorization,
+    ///      validAfter 0, 65-byte (r, s, v) signature.
+    function _signTransfer(uint256 key, address from, address to, uint256 value, uint256 validBefore, bytes32 nonce)
+        internal
+        view
+        returns (bytes memory)
+    {
+        bytes32 structHash = keccak256(
+            abi.encode(token.TRANSFER_WITH_AUTHORIZATION_TYPEHASH(), from, to, value, uint256(0), validBefore, nonce)
+        );
+        return _signDigest(key, keccak256(abi.encodePacked("\x19\x01", token.DOMAIN_SEPARATOR(), structHash)));
+    }
+
     function _signPermit(uint256 key, address owner, address spender, uint256 value, uint256 deadline)
         internal
         view
