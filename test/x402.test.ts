@@ -22,7 +22,7 @@ const artifact = (name: string) =>
     bytecode: Hex
   }
 
-const MIN_FEE = 2_000n
+const MIN_FEE = 3_000n
 
 describe('x402 settlement', () => {
   let h: Harness

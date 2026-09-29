@@ -9,7 +9,7 @@
  *     DEPLOY_MANIFEST=manifests/base-mainnet.manifest npx tsx scripts/deploy-x402.ts # Base Mainnet
  *
  * Testnet reads FEE_WALLET, RELAYER_PK (address only), USDC_ADDRESS and X402_MIN_FEE_UNITS (default
- * 2000 = 0.002 USDC) from the environment; Mainnet deploys from the x402 manifest and nothing else.
+ * 3000 = 0.003 USDC) from the environment; Mainnet deploys from the x402 manifest and nothing else.
  * Signs with DEPLOYER_PK (or ADMIN_PK). Prints no keys. DRY_RUN=1 checks everything and sends nothing.
  *
  * The deploy block printed at the end goes into X402_SPLITTER_DEPLOY_BLOCK in the API's config:
@@ -63,7 +63,7 @@ if (expectedChain === base.id) {
     // The key the API actually signs with: a relayer that does not match it is a dead contract.
     relayer: privateKeyToAccount(need('RELAYER_PK') as Hex).address,
     uptoProxy: X402_UPTO_PROXY,
-    minFee: BigInt(process.env.X402_MIN_FEE_UNITS || '2000'),
+    minFee: BigInt(process.env.X402_MIN_FEE_UNITS || '3000'),
     expected: null,
     sha256: null,
   }

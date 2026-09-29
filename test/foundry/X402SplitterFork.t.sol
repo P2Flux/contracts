@@ -55,7 +55,7 @@ contract X402SplitterForkTest is Test {
         }
         vm.createSelectFork(rpc);
         payer = vm.addr(PAYER_KEY);
-        splitter = new P2FluxX402Splitter(USDC, feeWallet, relayer, UPTO_PROXY, 2_000);
+        splitter = new P2FluxX402Splitter(USDC, feeWallet, relayer, UPTO_PROXY, 3_000);
         vault = splitter.vaultOf(seller);
         deal(USDC, payer, 10e6);
     }

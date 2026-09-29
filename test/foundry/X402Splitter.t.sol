@@ -26,8 +26,8 @@ contract X402SplitterTest is P2FluxTest {
     ///      consume the `vm.prank` / `vm.expectRevert` meant for the settlement call itself.
     address internal sellerVault;
 
-    /// @dev The launch floor recorded in the deploy manifest: 0.002 USDC.
-    uint256 internal constant MIN_FEE = 2_000;
+    /// @dev The launch floor recorded in the deploy manifest: 0.003 USDC.
+    uint256 internal constant MIN_FEE = 3_000;
 
     event Paid(bytes32 indexed ref, address indexed recipient, address indexed token, uint256 net, uint256 fee);
     event PaymentSettled(bytes32 indexed paymentId);
@@ -158,10 +158,10 @@ contract X402SplitterTest is P2FluxTest {
     }
 
     function test_maxFee_isOnePercentWithAFloor() public view {
-        assertEq(splitter.maxFee(0), 2_000);
-        assertEq(splitter.maxFee(10_000), 2_000, "$0.01 pays the floor");
-        assertEq(splitter.maxFee(200_000), 2_000, "$0.20 is where 1% meets the floor");
-        assertEq(splitter.maxFee(300_000), 3_000, "$0.30 pays 1%");
+        assertEq(splitter.maxFee(0), 3_000);
+        assertEq(splitter.maxFee(10_000), 3_000, "$0.01 pays the floor");
+        assertEq(splitter.maxFee(300_000), 3_000, "$0.30 is where 1% meets the floor");
+        assertEq(splitter.maxFee(400_000), 4_000, "$0.40 pays 1%");
         assertEq(splitter.maxFee(100e6), 1e6, "$100 pays $1");
     }
 

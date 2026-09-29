@@ -128,7 +128,7 @@ contract P2FluxX402Splitter is ReentrancyGuard {
     /// @notice P2Flux's fee in basis points: 1%, the same as every one-time payment...
     uint16 public constant FEE_BPS = 100;
 
-    /// @notice ...but never less than this, in token base units (0.002 USDC at launch). Below a
+    /// @notice ...but never less than this, in token base units (0.003 USDC at launch). Below a
     ///         certain price a 1% fee would not pay for the settlement transaction itself.
     /// @dev Immutable rather than constant so the deploy manifest pins it, like the sponsored
     ///      splitter's FIXED_NETWORK_FEE: a different floor is a different, reviewed deployment.
