@@ -32,6 +32,7 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run abi:check
+      - run: npm run x402:check
 
   foundry:
     name: fuzz · invariants

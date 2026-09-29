@@ -90,7 +90,8 @@ export function loadManifest(path = process.env.DEPLOY_MANIFEST || ''): Manifest
     'RECURRING_CONSTRUCTOR_ARG_4_GAS_TREASURY', 'RECURRING_CONSTRUCTOR_ARG_5_SUPPORTED_TOKEN', 'RECURRING_EXPECTED_ADDRESS',
   ]
   for (const key of addressKeys) {
-    if (!isAddress(m[key], { strict: true })) fail(`${key} is not a checksummed address: ${m[key]}`)
+    // viem's strict mode still accepts an all-lowercase address (there is no checksum to fail), so compare.
+    if (!isAddress(m[key], { strict: true }) || getAddress(m[key]) !== m[key]) fail(`${key} is not a checksummed address: ${m[key]}`)
     if (/^0x0{40}$/.test(m[key])) fail(`${key} is the zero address`)
   }
 
@@ -133,7 +134,8 @@ const validateSponsored = (m: Record<Key | SponsoredKey, string>) => {
     if (m[a] !== m[b]) fail(`${a} (${m[a]}) does not equal ${b} (${m[b]})`)
   }
   for (const key of ['SPONSORED_SPLITTER_EXPECTED_ADDRESS', 'GAS_SPONSOR_EXPECTED_ADDRESS'] as const) {
-    if (!isAddress(m[key], { strict: true })) fail(`${key} is not a checksummed address: ${m[key]}`)
+    // viem's strict mode still accepts an all-lowercase address (there is no checksum to fail), so compare.
+    if (!isAddress(m[key], { strict: true }) || getAddress(m[key]) !== m[key]) fail(`${key} is not a checksummed address: ${m[key]}`)
     if (/^0x0{40}$/.test(m[key])) fail(`${key} is the zero address`)
   }
   if (m.SPONSORED_SPLITTER_EXPECTED_ADDRESS.toLowerCase() === m.GAS_SPONSOR_EXPECTED_ADDRESS.toLowerCase()) {

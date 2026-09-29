@@ -13,7 +13,14 @@ import { BaseError, ContractFunctionRevertedError, keccak256, parseEventLogs, to
 import { privateKeyToAccount } from 'viem/accounts'
 import { erc20Abi } from '../src/abi.js'
 import { paymentIdFor } from '../src/splitter.js'
-import { p2fluxX402SplitterAbi, transferWithAuthorizationTypedData, x402MaxFee } from '../src/x402.js'
+import {
+  p2fluxX402SplitterAbi,
+  transferWithAuthorizationTypedData,
+  X402_VAULT_CREATION_CODE,
+  x402MaxFee,
+  x402Ref,
+  x402VaultAddress,
+} from '../src/x402.js'
 import { startHarness, type Harness } from './_anvil.js'
 
 const artifact = (name: string) =>
@@ -67,8 +74,18 @@ describe('x402 settlement', () => {
     return { agent: agent.address, vault, nonce, authorization, signature }
   }
 
-  test('the exported ABI is exactly the compiled contract', () => {
+  test('the exported ABI and vault creation code are exactly the compiled contracts', () => {
     assert.deepEqual(p2fluxX402SplitterAbi, artifact('P2FluxX402Splitter').abi)
+    assert.equal(X402_VAULT_CREATION_CODE, artifact('P2FluxX402Vault').bytecode)
+  })
+
+  test('x402VaultAddress and x402Ref are the contract\'s vaultOf and refOf', async () => {
+    for (const seed of ['a', 'b', 'c', 'd']) {
+      const who = privateKeyToAccount(keccak256(toBytes(`vault ${seed}`))).address
+      assert.equal(x402VaultAddress(splitter, who), await read<Address>('vaultOf', [who]), `vault of ${who}`)
+      const nonce = keccak256(toBytes(`nonce ${seed}`))
+      assert.equal(x402Ref(who, nonce), await read<Hex>('refOf', [who, nonce]))
+    }
   })
 
   test('x402MaxFee mirrors the contract', async () => {
@@ -92,13 +109,13 @@ describe('x402 settlement', () => {
     const [paid] = parseEventLogs({ abi: p2fluxX402SplitterAbi, eventName: 'Paid', logs: receipt.logs })
     const [settled] = parseEventLogs({ abi: p2fluxX402SplitterAbi, eventName: 'PaymentSettled', logs: receipt.logs })
     assert.ok(paid && settled, 'Paid and PaymentSettled emitted')
-    assert.equal(paid.args.ref, p.nonce, 'reference is the authorization nonce')
+    assert.equal(paid.args.ref, x402Ref(p.agent, p.nonce), 'reference binds the payer and the nonce')
     assert.equal(paid.args.recipient.toLowerCase(), seller.toLowerCase())
     assert.equal(paid.args.net + paid.args.fee, 1_000_000n)
     assert.equal(
       settled.args.paymentId,
-      paymentIdFor({ token, recipient: seller, amount: 1_000_000n, reference: p.nonce }),
-      'same payment id as P2FluxSplitter',
+      paymentIdFor({ token, recipient: seller, amount: 1_000_000n, reference: x402Ref(p.agent, p.nonce) }),
+      'same payment id formula as P2FluxSplitter',
     )
     assert.equal(await balance(p.agent), 0n)
     assert.equal(await balance(p.vault), 0n)

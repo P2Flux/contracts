@@ -132,3 +132,11 @@ test('an immutable read back that disagrees with the real manifest is refused', 
   const sponsor = { supportedToken: plan.token, gasTreasury: plan.gasTreasury, relayer: plan.relayer, MAX_SPONSOR_FEE_HARD_CAP: plan.hardCap }
   assert.throws(() => assertImmutables('P2FluxGasSponsor', sponsor, { ...sponsor, MAX_SPONSOR_FEE_HARD_CAP: 250_000_000n }), /MAX_SPONSOR_FEE_HARD_CAP is 250000000/)
 })
+
+test('an all-lowercase address is refused: it carries no checksum to verify', () => {
+  for (const key of ['RELAYER', 'FEE_WALLET', 'SPONSORED_SPLITTER_EXPECTED_ADDRESS']) {
+    const v = lines()
+    v[key] = v[key]!.toLowerCase()
+    assert.throws(() => loadManifest(write(v)), /not a checksummed address/, key)
+  }
+})

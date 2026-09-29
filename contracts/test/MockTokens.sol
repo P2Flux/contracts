@@ -35,7 +35,7 @@ contract MockUSDC {
         return _move(from, to, value);
     }
 
-    function _move(address from, address to, uint256 value) internal returns (bool) {
+    function _move(address from, address to, uint256 value) internal virtual returns (bool) {
         require(balanceOf[from] >= value, "insufficient balance");
         balanceOf[from] -= value;
         balanceOf[to] += value;
@@ -74,8 +74,7 @@ interface IRecurringLike {
         uint256 maxGasReimbursement;
     }
 
-    function charge(RecurringAuthorization calldata auth, bytes calldata signature, uint256 gasReimbursement)
-        external;
+    function charge(RecurringAuthorization calldata auth, bytes calldata signature, uint256 gasReimbursement) external;
 }
 
 /// @notice ERC-20 whose transferFrom re-enters `charge` - the guard must stop it.
@@ -86,11 +85,9 @@ contract ReentrantToken is MockUSDC {
     bool public armed;
     bool public reentered;
 
-    function arm(
-        IRecurringLike _target,
-        IRecurringLike.RecurringAuthorization calldata auth,
-        bytes calldata signature
-    ) external {
+    function arm(IRecurringLike _target, IRecurringLike.RecurringAuthorization calldata auth, bytes calldata signature)
+        external
+    {
         target = _target;
         storedAuth = auth;
         storedSignature = signature;
@@ -188,7 +185,9 @@ contract GasBurnerWallet {
     uint256 public sink;
 
     function isValidSignature(bytes32, bytes calldata) external returns (bytes4) {
-        for (uint256 i = 0; i < 100_000; i++) sink = i;
+        for (uint256 i = 0; i < 100_000; i++) {
+            sink = i;
+        }
         return 0x1626ba7e;
     }
 }
@@ -222,6 +221,24 @@ contract MockFiatToken is MockUSDC {
 
     string public constant version = "2";
 
+    /// @dev What the issuer of the real token can do to any address, and to the token as a whole.
+    mapping(address => bool) public isBlacklisted;
+    bool public paused;
+
+    function setBlacklisted(address account, bool value) external {
+        isBlacklisted[account] = value;
+    }
+
+    function setPaused(bool value) external {
+        paused = value;
+    }
+
+    function _move(address from, address to, uint256 value) internal override returns (bool) {
+        require(!paused, "Pausable: paused");
+        require(!isBlacklisted[from] && !isBlacklisted[to], "Blacklistable: account is blacklisted");
+        return super._move(from, to, value);
+    }
+
     mapping(address => uint256) public nonces;
     mapping(address => mapping(bytes32 => bool)) public authorizationState;
 
@@ -244,9 +261,8 @@ contract MockFiatToken is MockUSDC {
         virtual
     {
         require(block.timestamp <= deadline, "permit expired");
-        bytes32 digest = _digest(
-            keccak256(abi.encode(PERMIT_TYPEHASH, owner, spender, value, nonces[owner]++, deadline))
-        );
+        bytes32 digest =
+            _digest(keccak256(abi.encode(PERMIT_TYPEHASH, owner, spender, value, nonces[owner]++, deadline)));
         require(_recover(digest, v, r, s) == owner, "invalid permit signature");
         allowance[owner][spender] = value;
         emit Approval(owner, spender, value);
@@ -269,11 +285,7 @@ contract MockFiatToken is MockUSDC {
         require(!authorizationState[from][nonce], "authorization is used or canceled");
 
         bytes32 digest = _digest(
-            keccak256(
-                abi.encode(
-                    RECEIVE_WITH_AUTHORIZATION_TYPEHASH, from, to, value, validAfter, validBefore, nonce
-                )
-            )
+            keccak256(abi.encode(RECEIVE_WITH_AUTHORIZATION_TYPEHASH, from, to, value, validAfter, validBefore, nonce))
         );
         require(_recover(digest, v, r, s) == from, "invalid authorization signature");
 
@@ -299,9 +311,7 @@ contract MockFiatToken is MockUSDC {
         require(!authorizationState[from][nonce], "authorization is used or canceled");
 
         bytes32 digest = _digest(
-            keccak256(
-                abi.encode(TRANSFER_WITH_AUTHORIZATION_TYPEHASH, from, to, value, validAfter, validBefore, nonce)
-            )
+            keccak256(abi.encode(TRANSFER_WITH_AUTHORIZATION_TYPEHASH, from, to, value, validAfter, validBefore, nonce))
         );
         require(_validSignature(from, digest, signature), "invalid authorization signature");
 

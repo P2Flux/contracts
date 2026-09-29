@@ -47,7 +47,9 @@
     "abi:sync": "tsx scripts/sync-abi.ts",
     "abi:check": "tsx scripts/sync-abi.ts --check",
     "test": "npm run compile && node --import tsx --test test/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "x402:sync": "tsx scripts/sync-x402.ts",
+    "x402:check": "tsx scripts/sync-x402.ts --check"
   },
   "dependencies": {
     "viem": "^2.21.0"

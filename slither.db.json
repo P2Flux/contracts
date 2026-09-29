@@ -78,15 +78,15 @@
   "first_line": "P2FluxRecurring.isChargeable(P2FluxRecurring.RecurringAuthorization) (contracts/P2FluxRecurring.sol#217-224) uses timestamp for comparisons"
  },
  {
-  "id": "8eff812103254dbb459a65228c2cd9fb23b8debd18c025f40cf3e53973ab4f6b",
-  "check": "incorrect-equality",
-  "impact": "Medium",
-  "first_line": "P2FluxX402Splitter.flush(address) (contracts/P2FluxX402Splitter.sol#279-287) uses a dangerous strict equality:"
- },
- {
   "id": "e2c38a68909969614315cd41c6af8b1662f79c9dccedfba82fc18b438d606bd2",
   "check": "missing-zero-check",
   "impact": "Low",
   "first_line": "P2FluxX402Vault.constructor(address)._recipient (contracts/P2FluxX402Splitter.sol#93) lacks a zero-check on :"
+ },
+ {
+  "id": "502a08e24284bef1173e3649604e27f33f1bf376f12a18959201de1001bbc331",
+  "check": "incorrect-equality",
+  "impact": "Medium",
+  "first_line": "P2FluxX402Splitter.flush(address) (contracts/P2FluxX402Splitter.sol#310-318) uses a dangerous strict equality:"
  }
 ]

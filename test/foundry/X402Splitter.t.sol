@@ -59,7 +59,7 @@ contract X402SplitterTest is P2FluxTest {
     function testFuzz_exact_conservation(uint256 value, uint256 fee, bytes32 nonce, uint256 recipientSeed) public {
         value = bound(value, 2, 1e15);
         uint256 cap = splitter.maxFee(value);
-        fee = bound(fee, 0, cap < value ? cap : value - 1);
+        fee = bound(fee, 0, cap < value / 2 ? cap : value / 2);
         address recipient = _cleanAddress(recipientSeed, address(splitter));
         vm.assume(recipient != splitter.vaultOf(recipient));
         token.mint(payer, value);
@@ -71,16 +71,18 @@ contract X402SplitterTest is P2FluxTest {
         assertEq(token.balanceOf(feeWallet), fee, "fee wallet receives the fee only");
         assertEq(token.balanceOf(splitter.vaultOf(recipient)), 0, "vault keeps nothing");
         assertEq(token.balanceOf(address(splitter)), 0, "splitter keeps nothing");
-        assertTrue(splitter.isPaymentProcessed(address(token), recipient, value, nonce));
+        assertTrue(splitter.isPaymentProcessed(address(token), recipient, value, splitter.refOf(payer, nonce)));
     }
 
-    /// The events are P2FluxSplitter's, with the signature's nonce as the reference.
-    function test_exact_eventsCarryTheNonceAsReference() public {
+    /// The events are P2FluxSplitter's, with the payer-bound reference.
+    function test_exact_eventsCarryThePayerBoundReference() public {
         token.mint(payer, 50_000);
         bytes32 nonce = keccak256("agent-nonce");
-        bytes32 id = splitter.paymentId(address(token), seller, 50_000, nonce);
+        bytes32 ref = splitter.refOf(payer, nonce);
+        assertEq(ref, keccak256(abi.encode(keccak256("P2FLUX_X402_REF_V1"), payer, nonce)));
+        bytes32 id = splitter.paymentId(address(token), seller, 50_000, ref);
         vm.expectEmit(address(splitter));
-        emit Paid(nonce, seller, address(token), 48_000, 2_000);
+        emit Paid(ref, seller, address(token), 48_000, 2_000);
         vm.expectEmit(address(splitter));
         emit PaymentSettled(id);
         _settleExact(seller, 50_000, 2_000, nonce);
@@ -147,18 +149,48 @@ contract X402SplitterTest is P2FluxTest {
         splitter.settleWithAuthorization(seller, fee, a, sig);
     }
 
-    /// A fee that would leave the seller nothing is refused, even when it is within maxFee.
-    function test_feeConsumingTheWholeAmountRefused() public {
-        token.mint(payer, 2_000);
-        P2FluxX402Splitter.Authorization memory a = _auth(2_000, "n");
-        bytes memory sig = _signTransfer(PAYER_KEY, payer, splitter.vaultOf(seller), 2_000, a.validBefore, "n");
+    /// The seller always receives at least half: a fee within maxFee is still refused above that.
+    function testFuzz_sellerAlwaysReceivesAtLeastHalf(uint256 value, uint256 fee) public {
+        value = bound(value, 1, 5_999); // below 2 x MIN_FEE the floor alone would allow more than half
+        fee = bound(fee, value / 2 + 1, MIN_FEE);
+        token.mint(payer, value);
+        P2FluxX402Splitter.Authorization memory a = _auth(value, "n");
+        bytes memory sig = _signTransfer(PAYER_KEY, payer, sellerVault, value, a.validBefore, "n");
         vm.prank(relayer);
         vm.expectRevert(P2FluxX402Splitter.AmountTooSmall.selector);
-        splitter.settleWithAuthorization(seller, 2_000, a, sig);
+        splitter.settleWithAuthorization(seller, fee, a, sig);
+    }
+
+    function test_fee_boundaries() public {
+        // amount 300_000: 1% == MIN_FEE == 3_000. One unit over the cap is refused, the cap settles.
+        uint256[3] memory amounts = [uint256(299_999), 300_000, 300_001];
+        for (uint256 i = 0; i < amounts.length; i++) {
+            uint256 amount = amounts[i];
+            uint256 cap = splitter.maxFee(amount);
+            assertEq(cap, 3_000);
+            token.mint(payer, amount * 2);
+            bytes32 over = keccak256(abi.encode("over", i));
+            P2FluxX402Splitter.Authorization memory a = _auth(amount, over);
+            bytes memory sig = _signTransfer(PAYER_KEY, payer, sellerVault, amount, a.validBefore, over);
+            vm.prank(relayer);
+            vm.expectRevert(P2FluxX402Splitter.FeeTooHigh.selector);
+            splitter.settleWithAuthorization(seller, cap + 1, a, sig);
+            vm.prank(relayer);
+            splitter.settleWithAuthorization(seller, cap, a, sig);
+        }
+        // Exactly half is allowed, one unit more is not.
+        token.mint(payer, 6_000 + 5_999);
+        _settleExact(seller, 6_000, 3_000, "half");
+        P2FluxX402Splitter.Authorization memory b = _auth(5_999, "over-half");
+        bytes memory sigB = _signTransfer(PAYER_KEY, payer, sellerVault, 5_999, b.validBefore, "over-half");
+        vm.prank(relayer);
+        vm.expectRevert(P2FluxX402Splitter.AmountTooSmall.selector);
+        splitter.settleWithAuthorization(seller, 3_000, b, sigB);
     }
 
     function test_maxFee_isOnePercentWithAFloor() public view {
         assertEq(splitter.maxFee(0), 3_000);
+        assertEq(splitter.maxFee(1_000_000), 10_000);
         assertEq(splitter.maxFee(10_000), 3_000, "$0.01 pays the floor");
         assertEq(splitter.maxFee(300_000), 3_000, "$0.30 is where 1% meets the floor");
         assertEq(splitter.maxFee(400_000), 4_000, "$0.40 pays 1%");
@@ -169,7 +201,7 @@ contract X402SplitterTest is P2FluxTest {
     function test_exact_replayRefused() public {
         token.mint(payer, 2e6);
         _settleExact(seller, 1e6, 0, "n");
-        bytes32 id = splitter.paymentId(address(token), seller, 1e6, "n");
+        bytes32 id = splitter.paymentId(address(token), seller, 1e6, splitter.refOf(payer, "n"));
         P2FluxX402Splitter.Authorization memory a = _auth(1e6, "n");
         bytes memory sig = _signTransfer(PAYER_KEY, payer, splitter.vaultOf(seller), 1e6, a.validBefore, "n");
         vm.prank(relayer);
@@ -276,7 +308,7 @@ contract X402SplitterTest is P2FluxTest {
         max = bound(max, 2, 1e15);
         used = bound(used, 2, max);
         uint256 cap = splitter.maxFee(used);
-        fee = bound(fee, 0, cap < used ? cap : used - 1);
+        fee = bound(fee, 0, cap < used / 2 ? cap : used / 2);
         token.mint(payer, max);
         vm.prank(payer);
         token.approve(address(proxy), max);
@@ -288,7 +320,7 @@ contract X402SplitterTest is P2FluxTest {
         assertEq(token.balanceOf(seller), used - fee);
         assertEq(token.balanceOf(feeWallet), fee);
         assertEq(token.balanceOf(splitter.vaultOf(seller)), 0);
-        assertTrue(splitter.isPaymentProcessed(address(token), seller, used, bytes32(nonce)));
+        assertTrue(splitter.isPaymentProcessed(address(token), seller, used, splitter.refOf(payer, bytes32(nonce))));
     }
 
     function test_upto_withPermitForAPayerWhoNeverApproved() public {
@@ -345,7 +377,7 @@ contract X402SplitterTest is P2FluxTest {
         token.approve(address(proxy), 2e6);
         vm.prank(relayer);
         splitter.settleUpto(seller, 0, _permit(1e6, 7), 1e6, payer, _witness(sellerVault), "");
-        bytes32 id = splitter.paymentId(address(token), seller, 1e6, bytes32(uint256(7)));
+        bytes32 id = splitter.paymentId(address(token), seller, 1e6, splitter.refOf(payer, bytes32(uint256(7))));
         vm.prank(relayer);
         vm.expectRevert(abi.encodeWithSelector(P2FluxX402Splitter.PaymentAlreadyProcessed.selector, id));
         splitter.settleUpto(seller, 0, _permit(1e6, 7), 1e6, payer, _witness(sellerVault), "");

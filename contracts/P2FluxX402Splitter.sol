@@ -95,12 +95,25 @@ contract P2FluxX402Vault {
         recipient = _recipient;
     }
 
+    /// @notice Pay `amount` out: `fee` to the fee wallet, the rest to the seller.
+    /// @return feePaid What the fee wallet actually received: `fee`, or zero if it could not be paid.
+    ///
     /// @dev `token` and `feeWallet` are the factory's own immutables, passed in to keep this contract
     ///      the smallest thing that can hold the rule above.
-    function release(IERC20 token, address feeWallet, uint256 net, uint256 fee) external {
+    ///
+    ///      A fee that cannot be paid goes to the seller instead. The fee wallet is immutable, and a
+    ///      token issuer can freeze any address: if paying the fee were mandatory, a frozen fee wallet
+    ///      would lock every seller's money in every vault, forever, with nobody able to fix it. The
+    ///      seller's own transfer stays mandatory - if THAT fails, nothing moves.
+    function release(IERC20 token, address feeWallet, uint256 amount, uint256 fee) external returns (uint256 feePaid) {
         if (msg.sender != factory) revert NotFactory();
-        token.safeTransfer(recipient, net);
-        if (fee > 0) token.safeTransfer(feeWallet, fee);
+        if (fee > 0 && _tryTransfer(token, feeWallet, fee)) feePaid = fee;
+        token.safeTransfer(recipient, amount - feePaid);
+    }
+
+    function _tryTransfer(IERC20 token, address to, uint256 value) private returns (bool) {
+        (bool ok, bytes memory ret) = address(token).call(abi.encodeCall(IERC20.transfer, (to, value)));
+        return ok && (ret.length == 0 || abi.decode(ret, (bool)));
     }
 }
 
@@ -114,12 +127,13 @@ contract P2FluxX402Vault {
 ///        - `upto`:  a Permit2 witness transfer of at most the signed maximum to the vault, which only
 ///                   this contract (the witness `facilitator`) may execute, for the amount used.
 ///      The relayer submits it here; this contract pulls the money into the vault and has the vault
-///      pay the seller and the fee wallet. The reference is the signature's own nonce, so every
+///      pay the seller and the fee wallet. The reference is derived from the payer and the signature's
+///      own nonce (`refOf`), so every
 ///      payment is identifiable on-chain without the client knowing anything about P2Flux, and the
 ///      events are exactly P2FluxSplitter's - one verifier reads all three settlement contracts.
 ///
-///      The relayer chooses one thing: the fee, never above `maxFee(amount)` and never the whole
-///      amount. It cannot choose the recipient, the amount, or where the money goes.
+///      The relayer chooses one thing: the fee, never above `maxFee(amount)` and never more than
+///      half the amount. It cannot choose the recipient, the amount, or where the money goes.
 ///
 ///      Not upgradeable, no owner, no pause, no withdrawal path. Neither this contract nor any vault
 ///      keeps a balance between transactions except what was sent outside a settlement, and that
@@ -137,6 +151,10 @@ contract P2FluxX402Splitter is ReentrancyGuard {
     /// @dev Same domain as P2FluxSplitter and P2FluxSponsoredSplitter: identical terms produce an
     ///      identical payment id, so one recovery routine reads every settlement contract.
     bytes32 public constant PAYMENT_DOMAIN = keccak256("P2FLUX_PAYMENT_V1");
+
+    /// @dev Domain of an x402 payment reference. Keeps x402 references apart from every reference a
+    ///      checkout intent can carry, so a payment made here can never be read as one made there.
+    bytes32 public constant X402_REF_DOMAIN = keccak256("P2FLUX_X402_REF_V1");
 
     /// @notice The only token this deployment settles.
     address public immutable supportedToken;
@@ -209,6 +227,18 @@ contract P2FluxX402Splitter is ReentrancyGuard {
         return processedPayments[paymentId(token, recipient, amount, ref)];
     }
 
+    /// @notice The reference of an x402 payment: the payer and the nonce of the payer's signature.
+    ///
+    /// @dev The payer is part of it because nonces are the PAYER's: USDC and Permit2 both keep them
+    ///      per owner, so two wallets may use the same nonce. With the nonce alone, anyone who saw a
+    ///      payment before it settled could pay the same seller the same amount with the same nonce
+    ///      from their own wallet, and the original payment would then be refused as already settled.
+    ///      Both schemes share this one function, so an `exact` nonce and an `upto` nonce of different
+    ///      payers cannot collide either.
+    function refOf(address payer, bytes32 nonce) public pure returns (bytes32) {
+        return keccak256(abi.encode(X402_REF_DOMAIN, payer, nonce));
+    }
+
     /// @notice The most P2Flux may take from a payment of `amount`: 1%, at least `MIN_FEE`.
     function maxFee(uint256 amount) public view returns (uint256) {
         uint256 fee = (amount * FEE_BPS) / 10_000;
@@ -234,10 +264,11 @@ contract P2FluxX402Splitter is ReentrancyGuard {
         nonReentrant
     {
         if (msg.sender != relayer) revert NotRelayer();
-        (address vault, uint256 held, bytes32 id) = _open(recipient, a.value, fee, a.nonce);
+        // `a.from` is proven by the token: it verifies the signature against exactly this address.
+        Settlement memory s = _open(recipient, a.value, fee, refOf(a.from, a.nonce));
         IERC3009Transfer(supportedToken)
-            .transferWithAuthorization(a.from, vault, a.value, a.validAfter, a.validBefore, a.nonce, signature);
-        _close(vault, held, recipient, a.value, fee, a.nonce, id);
+            .transferWithAuthorization(a.from, s.vault, a.value, a.validAfter, a.validBefore, a.nonce, signature);
+        _close(s);
     }
 
     /// @notice x402 `upto`: settle `amount` (at most the signed maximum) through x402's upto proxy.
@@ -250,9 +281,9 @@ contract P2FluxX402Splitter is ReentrancyGuard {
         IX402UptoPermit2Proxy.Witness calldata witness,
         bytes calldata signature
     ) external nonReentrant {
-        (address vault, uint256 held, bytes32 id) = _openUpto(recipient, fee, permit, amount, witness);
+        Settlement memory s = _openUpto(recipient, fee, permit, amount, owner, witness);
         uptoProxy.settle(permit, amount, owner, witness, signature);
-        _close(vault, held, recipient, amount, fee, bytes32(permit.nonce), id);
+        _close(s);
     }
 
     /// @notice As `settleUpto`, for a payer who has not yet approved Permit2: the proxy first applies
@@ -267,9 +298,9 @@ contract P2FluxX402Splitter is ReentrancyGuard {
         IX402UptoPermit2Proxy.Witness calldata witness,
         bytes calldata signature
     ) external nonReentrant {
-        (address vault, uint256 held, bytes32 id) = _openUpto(recipient, fee, permit, amount, witness);
+        Settlement memory s = _openUpto(recipient, fee, permit, amount, owner, witness);
         uptoProxy.settleWithPermit(permit2612, permit, amount, owner, witness, signature);
-        _close(vault, held, recipient, amount, fee, bytes32(permit.nonce), id);
+        _close(s);
     }
 
     /// @notice Pay out whatever reached a vault outside a settlement - an authorization someone
@@ -282,60 +313,74 @@ contract P2FluxX402Splitter is ReentrancyGuard {
         uint256 balance = IERC20(supportedToken).balanceOf(vault);
         if (balance == 0) revert ZeroAmount();
         uint256 fee = (balance * FEE_BPS) / 10_000;
-        P2FluxX402Vault(vault).release(IERC20(supportedToken), feeWallet, balance - fee, fee);
-        emit Flushed(recipient, balance - fee, fee);
+        uint256 feePaid = P2FluxX402Vault(vault).release(IERC20(supportedToken), feeWallet, balance, fee);
+        emit Flushed(recipient, balance - feePaid, feePaid);
     }
 
     // --- internals -----------------------------------------------------------
+
+    /// @dev One settlement between `_open` and `_close`.
+    struct Settlement {
+        address vault;
+        address recipient;
+        uint256 amount;
+        uint256 fee;
+        bytes32 ref;
+        bytes32 id;
+        /// What the vault held before the pull: a donation or a stranded payment, left for `flush`.
+        uint256 held;
+    }
 
     function _openUpto(
         address recipient,
         uint256 fee,
         ISignatureTransfer.PermitTransferFrom calldata permit,
         uint256 amount,
+        address owner,
         IX402UptoPermit2Proxy.Witness calldata witness
-    ) private returns (address, uint256, bytes32) {
+    ) private returns (Settlement memory) {
         if (msg.sender != relayer) revert NotRelayer();
         if (permit.permitted.token != supportedToken) revert TokenNotSupported();
         // The proxy pays `witness.to`, and it must be this seller's vault - otherwise the release
         // below would be paid from money that is not this payment's.
         if (witness.to != vaultOf(recipient)) revert WrongDestination();
-        return _open(recipient, amount, fee, bytes32(permit.nonce));
+        // `owner` is proven by Permit2, which verifies the signature against exactly this address.
+        return _open(recipient, amount, fee, refOf(owner, bytes32(permit.nonce)));
     }
 
     /// @dev Checks and effects. A revert anywhere later rolls this back, so a failed settlement
     ///      leaves the payment settleable.
-    function _open(address recipient, uint256 amount, uint256 fee, bytes32 ref)
-        private
-        returns (address vault, uint256 held, bytes32 id)
-    {
+    function _open(address recipient, uint256 amount, uint256 fee, bytes32 ref) private returns (Settlement memory s) {
         if (recipient == address(0)) revert ZeroAddress();
         if (amount == 0) revert ZeroAmount();
         if (fee > maxFee(amount)) revert FeeTooHigh();
-        // The seller must be left with something: refused outright rather than paying them zero.
-        if (fee >= amount) revert AmountTooSmall();
-        id = paymentId(supportedToken, recipient, amount, ref);
+        /* The seller always receives at least half. `maxFee` has a floor, and a floor alone would let
+         * the fee be nearly all of a very small payment; a payment too small to carry its fee is
+         * refused outright rather than settled mostly to P2Flux. */
+        if (fee * 2 > amount) revert AmountTooSmall();
+        bytes32 id = paymentId(supportedToken, recipient, amount, ref);
         if (processedPayments[id]) revert PaymentAlreadyProcessed(id);
         processedPayments[id] = true;
-        vault = _deploy(recipient);
-        held = IERC20(supportedToken).balanceOf(vault);
+        address vault = _deploy(recipient);
+        s = Settlement({
+            vault: vault,
+            recipient: recipient,
+            amount: amount,
+            fee: fee,
+            ref: ref,
+            id: id,
+            held: IERC20(supportedToken).balanceOf(vault)
+        });
     }
 
     /// @dev The pull must have added exactly `amount` to the vault. Anything already there (a
     ///      donation, a stranded payment) is left alone for `flush`.
-    function _close(
-        address vault,
-        uint256 held,
-        address recipient,
-        uint256 amount,
-        uint256 fee,
-        bytes32 ref,
-        bytes32 id
-    ) private {
-        if (IERC20(supportedToken).balanceOf(vault) != held + amount) revert UnexpectedAmount();
-        P2FluxX402Vault(vault).release(IERC20(supportedToken), feeWallet, amount - fee, fee);
-        emit Paid(ref, recipient, supportedToken, amount - fee, fee);
-        emit PaymentSettled(id);
+    function _close(Settlement memory s) private {
+        if (IERC20(supportedToken).balanceOf(s.vault) != s.held + s.amount) revert UnexpectedAmount();
+        uint256 feePaid = P2FluxX402Vault(s.vault).release(IERC20(supportedToken), feeWallet, s.amount, s.fee);
+        // What was paid, not what was asked: a fee the fee wallet could not receive went to the seller.
+        emit Paid(s.ref, s.recipient, supportedToken, s.amount - feePaid, feePaid);
+        emit PaymentSettled(s.id);
     }
 
     function _deploy(address recipient) private returns (address vault) {

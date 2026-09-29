@@ -21,7 +21,8 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { base, baseSepolia } from 'viem/chains'
 import { X402_UPTO_PROXY } from '../src/x402.js'
 import { assertImmutables, assertPredicted } from './sponsored-manifest.js'
-import { loadX402Manifest, type X402Plan } from './x402-manifest.js'
+import { loadManifest } from './manifest.js'
+import { loadX402Manifest, x402InitcodeKeccak, type X402Plan } from './x402-manifest.js'
 
 for (const line of readFileSync(process.env.ENV_FILE || '../p2flux_payment/.env', 'utf8').split('\n')) {
   const match = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim())
@@ -49,10 +50,15 @@ const deployer = privateKeyToAccount((process.env.DEPLOYER_PK || need('ADMIN_PK'
 
 let plan: X402Plan
 if (expectedChain === base.id) {
-  if (!process.env.X402_MANIFEST || !process.env.DEPLOY_MANIFEST) {
-    throw new Error('Base Mainnet deploys only from an approved manifest: set X402_MANIFEST and DEPLOY_MANIFEST')
+  if (!process.env.X402_MANIFEST || !process.env.DEPLOY_MANIFEST || !process.env.X402_MANIFEST_SHA256) {
+    throw new Error(
+      'Base Mainnet deploys only from an approved manifest: set X402_MANIFEST, X402_MANIFEST_SHA256 (the approved hash) and DEPLOY_MANIFEST',
+    )
   }
-  plan = loadX402Manifest(process.env.X402_MANIFEST, process.env.DEPLOY_MANIFEST)
+  plan = loadX402Manifest(process.env.X402_MANIFEST, process.env.DEPLOY_MANIFEST, process.env.X402_MANIFEST_SHA256)
+  if (deployer.address !== loadManifest(process.env.DEPLOY_MANIFEST).DEPLOYER) {
+    throw new Error('DEPLOYER_PK does not derive to the manifest DEPLOYER')
+  }
   if (process.env.RELAYER_PK && privateKeyToAccount(process.env.RELAYER_PK as Hex).address !== plan.relayer) {
     throw new Error('RELAYER_PK does not derive to the manifest RELAYER')
   }
@@ -65,6 +71,7 @@ if (expectedChain === base.id) {
     uptoProxy: X402_UPTO_PROXY,
     minFee: BigInt(process.env.X402_MIN_FEE_UNITS || '3000'),
     expected: null,
+    initcodeKeccak: null,
     sha256: null,
   }
 }
@@ -94,13 +101,21 @@ console.log('')
 console.log('P2FluxX402Splitter will be created at', willCreate, `(nonce ${nonce})`, plan.expected ? '- matches manifest' : '')
 if (plan.sha256) console.log('x402 manifest sha256', plan.sha256)
 
+/* The bytecode about to be signed, against the bytecode that was approved. `out/` is a build output
+ * on a workstation: nothing else ties it to the reviewed source. */
+const built = artifact('P2FluxX402Splitter')
+const initcodeKeccak = x402InitcodeKeccak(built, plan)
+console.log('initcode keccak', initcodeKeccak, plan.initcodeKeccak ? '' : '(testnet: not pinned)')
+if (plan.initcodeKeccak && plan.initcodeKeccak !== initcodeKeccak) {
+  throw new Error(`out/P2FluxX402Splitter.json builds ${initcodeKeccak}, the manifest approved ${plan.initcodeKeccak}: recompile from the approved commit`)
+}
+
 if (process.env.DRY_RUN === '1') {
   console.log('DRY_RUN: nothing sent')
   process.exit(0)
 }
 
 const wallet = createWalletClient({ account: deployer, chain: viemChain, transport: http(rpc) })
-const built = artifact('P2FluxX402Splitter')
 const hash = await wallet.deployContract({
   abi: built.abi as never,
   bytecode: built.bytecode,

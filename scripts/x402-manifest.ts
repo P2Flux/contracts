@@ -9,7 +9,7 @@
  */
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { isAddress, type Address } from 'viem'
+import { encodeDeployData, isAddress, keccak256, type Abi, type Address, type Hex } from 'viem'
 import { addr, loadManifest } from './manifest.js'
 import { X402_UPTO_PROXY } from '../src/x402.js'
 
@@ -23,6 +23,7 @@ export const X402_KEYS = [
   'X402_SPLITTER_CONSTRUCTOR_ARG_5_MIN_FEE_MICRO_USDC',
   'X402_SPLITTER_FEE_BPS',
   'X402_SPLITTER_EXPECTED_ADDRESS',
+  'X402_SPLITTER_INITCODE_KECCAK',
 ] as const
 type Key = (typeof X402_KEYS)[number]
 
@@ -33,6 +34,8 @@ export type X402Plan = {
   uptoProxy: Address
   minFee: bigint
   expected: Address | null
+  /** keccak256 of the exact creation transaction data the approval covers. Null on testnet. */
+  initcodeKeccak: Hex | null
   sha256: string | null
 }
 
@@ -40,8 +43,27 @@ const fail = (message: string): never => {
   throw new Error(`x402 manifest: ${message}`)
 }
 
-export function loadX402Manifest(path: string, mainPath: string): X402Plan {
+/**
+ * keccak256 of what the deployment transaction will carry: creation code followed by the encoded
+ * constructor arguments. Pinning it in the manifest means the approval covers the BYTECODE, not only
+ * the arguments - a stale or altered build in out/ is refused before anything is signed.
+ */
+export const x402InitcodeKeccak = (artifact: { abi: unknown; bytecode: Hex }, plan: Pick<X402Plan, 'token' | 'feeWallet' | 'relayer' | 'uptoProxy' | 'minFee'>): Hex =>
+  keccak256(
+    encodeDeployData({
+      abi: artifact.abi as Abi,
+      bytecode: artifact.bytecode,
+      args: [plan.token, plan.feeWallet, plan.relayer, plan.uptoProxy, plan.minFee],
+    }),
+  )
+
+export function loadX402Manifest(path: string, mainPath: string, approvedSha256?: string): X402Plan {
   const raw = readFileSync(path)
+  const sha256 = createHash('sha256').update(raw).digest('hex')
+  /* The approval names this exact file. Without the hash, "a manifest" is whatever is on disk. */
+  if (approvedSha256 !== undefined && approvedSha256.toLowerCase() !== sha256) {
+    fail(`this file is ${sha256}, the approved manifest is ${approvedSha256}`)
+  }
   const values: Partial<Record<Key, string>> = {}
   for (const line of raw.toString('utf8').split('\n')) {
     const trimmed = line.trim()
@@ -63,7 +85,8 @@ export function loadX402Manifest(path: string, mainPath: string): X402Plan {
     'X402_SPLITTER_EXPECTED_ADDRESS',
   ]
   for (const key of addressKeys) {
-    if (!isAddress(m[key], { strict: true })) fail(`${key} is not a checksummed address: ${m[key]}`)
+    // viem's strict mode still accepts an all-lowercase address (there is no checksum to fail), so compare.
+    if (!isAddress(m[key], { strict: true }) || addr(m[key]) !== m[key]) fail(`${key} is not a checksummed address: ${m[key]}`)
     if (/^0x0{40}$/.test(m[key])) fail(`${key} is the zero address`)
   }
   const same = (a: Key, b: Key) => {
@@ -77,6 +100,7 @@ export function loadX402Manifest(path: string, mainPath: string): X402Plan {
   const minFee = m.X402_SPLITTER_CONSTRUCTOR_ARG_5_MIN_FEE_MICRO_USDC
   if (!/^\d+$/.test(minFee) || BigInt(minFee) > 100_000n) fail('MIN_FEE must be an integer between 0 and 100000 (0.10 USDC)')
   if (m.CHAIN_ID !== '8453' || m.NETWORK !== 'Base Mainnet') fail('this manifest format is for Base Mainnet (8453) only')
+  if (!/^0x[0-9a-f]{64}$/.test(m.X402_SPLITTER_INITCODE_KECCAK)) fail('X402_SPLITTER_INITCODE_KECCAK must be 0x + 64 lowercase hex')
 
   // Anchored to the approved main manifest: same token, fee wallet and relayer, and that exact file.
   const main = loadManifest(mainPath)
@@ -92,6 +116,7 @@ export function loadX402Manifest(path: string, mainPath: string): X402Plan {
     uptoProxy: addr(m.X402_SPLITTER_CONSTRUCTOR_ARG_4_UPTO_PROXY),
     minFee: BigInt(minFee),
     expected: addr(m.X402_SPLITTER_EXPECTED_ADDRESS),
-    sha256: createHash('sha256').update(raw).digest('hex'),
+    initcodeKeccak: m.X402_SPLITTER_INITCODE_KECCAK as Hex,
+    sha256,
   }
 }
