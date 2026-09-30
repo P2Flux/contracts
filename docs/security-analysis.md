@@ -68,7 +68,7 @@ Reviewed 2026-09-18 and 2026-09-29 (x402, re-run after the review fixes), Slithe
 | `unused-return` ×2 | `P2FluxRecurring._isAuthorized` | **Informational.** The ignored value is `tryRecover`'s error argument; the error code itself is checked. |
 | `reentrancy-events` ×2 | `P2FluxSplitter.pay` | **Informational.** State is written before the token calls (checks-effects-interactions); the token is pinned. |
 | `timestamp` ×3 | `P2FluxRecurring` period logic | **Accepted.** Periods are hours to months; validator timestamp drift of seconds cannot move a charge across a period in any way that benefits anyone. |
-| `incorrect-equality` | `P2FluxX402Splitter.flush` | **False positive.** `balance == 0` only means "nothing to pay out". Anyone can make it false by sending the vault money, and the only effect is that the money is paid to that vault's seller. |
+| `incorrect-equality` | `P2FluxX402Splitter.flush`, `P2FluxBatchVaults.flush` | **False positive.** `balance == 0` only means "nothing to pay out". Anyone can make it false by sending the vault money, and the only effect is that the money is paid to that vault's seller. |
 | `missing-zero-check` | `P2FluxX402Vault` constructor | **False positive.** A vault is only ever deployed by the splitter, which refuses a zero recipient on both paths (`_open`, `flush`) before deploying. |
 
 ## x402 security review, 2026-09-29

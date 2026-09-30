@@ -14,6 +14,8 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { erc20Abi } from '../src/abi.js'
 import { paymentIdFor } from '../src/splitter.js'
 import {
+  batchVaultAddress,
+  p2fluxBatchVaultsAbi,
   p2fluxX402SplitterAbi,
   transferWithAuthorizationTypedData,
   X402_VAULT_CREATION_CODE,
@@ -86,6 +88,21 @@ describe('x402 settlement', () => {
       const nonce = keccak256(toBytes(`nonce ${seed}`))
       assert.equal(x402Ref(who, nonce), await read<Hex>('refOf', [who, nonce]))
     }
+  })
+
+  test('batch vaults: exported ABI is compiled, address derivation matches, flush pays 97% and 3%', async () => {
+    assert.deepEqual(p2fluxBatchVaultsAbi, artifact('P2FluxBatchVaults').abi)
+    const vaults = await h.deploy('P2FluxBatchVaults', [token, h.feeWallet])
+    const who = privateKeyToAccount(keccak256(toBytes('batch seller'))).address
+    const vault = batchVaultAddress(vaults, who)
+    assert.equal(vault, await read<Address>('vaultOf', [who], vaults, p2fluxBatchVaultsAbi))
+    assert.notEqual(vault, x402VaultAddress(splitter, who))
+    await h.mint(vault, 2_000_000n, token)
+    const fee0 = await balance(h.feeWallet)
+    const hash = await h.relayer.writeContract({ address: vaults, abi: p2fluxBatchVaultsAbi, functionName: 'flush', args: [who] } as never)
+    await h.chain.waitForTransactionReceipt({ hash })
+    assert.equal(await balance(who), 1_940_000n)
+    assert.equal((await balance(h.feeWallet)) - fee0, 60_000n)
   })
 
   test('x402MaxFee mirrors the contract', async () => {

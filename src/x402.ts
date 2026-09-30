@@ -1,7 +1,7 @@
 import { encodeAbiParameters, getContractAddress, keccak256, toBytes, zeroHash, type Address, type Hex } from 'viem'
-import { p2fluxX402SplitterAbi, X402_VAULT_CREATION_CODE } from './x402.generated.js'
+import { p2fluxX402SplitterAbi, p2fluxBatchVaultsAbi, X402_VAULT_CREATION_CODE } from './x402.generated.js'
 
-export { p2fluxX402SplitterAbi, X402_VAULT_CREATION_CODE }
+export { p2fluxX402SplitterAbi, p2fluxBatchVaultsAbi, X402_VAULT_CREATION_CODE }
 
 /*
  * x402 settlement: AI agents paying for APIs, content and tools with an unmodified x402 client, settled
@@ -92,3 +92,12 @@ export const x402VaultAddress = (splitter: Address, recipient: Address): Address
     salt: zeroHash,
     bytecode: `${X402_VAULT_CREATION_CODE}${encodeAbiParameters([{ type: 'address' }], [recipient]).slice(2)}`,
   })
+
+/** Fee on a batch-settlement payout, basis points (P2FluxBatchVaults.FEE_BPS): 3%. */
+export const X402_BATCH_FEE_BPS = 300n
+
+/**
+ * A seller's batch vault - the `receiver` of their x402 batch-settlement channels. Same vault code and
+ * derivation as the exact vault, from the P2FluxBatchVaults factory instead, so the address differs.
+ */
+export const batchVaultAddress = (batchVaults: Address, recipient: Address): Address => x402VaultAddress(batchVaults, recipient)

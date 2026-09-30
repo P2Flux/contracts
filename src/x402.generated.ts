@@ -702,5 +702,136 @@ export const p2fluxX402SplitterAbi = [
   }
 ] as const
 
+/** The full P2FluxBatchVaults ABI: per-seller vaults for x402 batch settlement (97% seller, 3% fee). */
+export const p2fluxBatchVaultsAbi = [
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_supportedToken",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_feeWallet",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "constructor"
+  },
+  {
+    "inputs": [],
+    "name": "ReentrancyGuardReentrantCall",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ZeroAddress",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ZeroAmount",
+    "type": "error"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "recipient",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "net",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "fee",
+        "type": "uint256"
+      }
+    ],
+    "name": "Flushed",
+    "type": "event"
+  },
+  {
+    "inputs": [],
+    "name": "FEE_BPS",
+    "outputs": [
+      {
+        "internalType": "uint16",
+        "name": "",
+        "type": "uint16"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "feeWallet",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "recipient",
+        "type": "address"
+      }
+    ],
+    "name": "flush",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "supportedToken",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "recipient",
+        "type": "address"
+      }
+    ],
+    "name": "vaultOf",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  }
+] as const
+
 /** P2FluxX402Vault creation code: `vaultOf` is CREATE2 over this followed by abi.encode(recipient). */
 export const X402_VAULT_CREATION_CODE = '0x60c0604052348015600e575f80fd5b50604051610472380380610472833981016040819052602b91603f565b336080526001600160a01b031660a052606a565b5f60208284031215604e575f80fd5b81516001600160a01b03811681146063575f80fd5b9392505050565b60805160a0516103dc6100965f395f8181606e015261013b01525f818160ad015260db01526103dc5ff3fe608060405234801561000f575f80fd5b506004361061003f575f3560e01c806316afdf8e1461004357806366d003ac14610069578063c45a0155146100a8575b5f80fd5b610056610051366004610302565b6100cf565b6040519081526020015b60405180910390f35b6100907f000000000000000000000000000000000000000000000000000000000000000081565b6040516001600160a01b039091168152602001610060565b6100907f000000000000000000000000000000000000000000000000000000000000000081565b5f336001600160a01b037f0000000000000000000000000000000000000000000000000000000000000000161461011957604051631966391b60e11b815260040160405180910390fd5b5f8211801561012e575061012e85858461017d565b156101365750805b6101757f00000000000000000000000000000000000000000000000000000000000000006101648386610345565b6001600160a01b038816919061024b565b949350505050565b6040516001600160a01b038381166024830152604482018390525f91829182919087169060640160408051601f198184030181529181526020820180516001600160e01b031663a9059cbb60e01b179052516101d9919061036a565b5f604051808303815f865af19150503d805f8114610212576040519150601f19603f3d011682016040523d82523d5f602084013e610217565b606091505b50915091508180156102415750805115806102415750808060200190518101906102419190610380565b9695505050505050565b6102588383836001610289565b61028457604051635274afe760e01b81526001600160a01b038416600482015260240160405180910390fd5b505050565b60405163a9059cbb60e01b5f8181526001600160a01b038616600452602485905291602083604481808b5af1925060015f511483166102df5783831516156102d3573d5f823e3d81fd5b5f873b113d1516831692505b60405250949350505050565b6001600160a01b03811681146102ff575f80fd5b50565b5f805f8060808587031215610315575f80fd5b8435610320816102eb565b93506020850135610330816102eb565b93969395505050506040820135916060013590565b8181038181111561036457634e487b7160e01b5f52601160045260245ffd5b92915050565b5f82518060208501845e5f920191825250919050565b5f60208284031215610390575f80fd5b8151801515811461039f575f80fd5b939250505056fea26469706673582212208528bec3a0f2cebdf4845102e8bf5bd840e0bc5dfb06ccfae5d80a3c5aab2d5764736f6c634300081a0033' as const

@@ -12,6 +12,7 @@ const CONTRACTS = [
   'P2FluxSponsoredSplitter.sol',
   'P2FluxGasSponsor.sol',
   'P2FluxX402Splitter.sol',
+  'P2FluxBatchVaults.sol',
   'test/MockTokens.sol',
   'test/MockX402.sol',
 ]
