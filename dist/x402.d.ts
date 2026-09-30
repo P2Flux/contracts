@@ -1,6 +1,6 @@
 import { type Address, type Hex } from 'viem';
-import { p2fluxX402SplitterAbi, X402_VAULT_CREATION_CODE } from './x402.generated.js';
-export { p2fluxX402SplitterAbi, X402_VAULT_CREATION_CODE };
+import { p2fluxX402SplitterAbi, p2fluxBatchVaultsAbi, X402_VAULT_CREATION_CODE } from './x402.generated.js';
+export { p2fluxX402SplitterAbi, p2fluxBatchVaultsAbi, X402_VAULT_CREATION_CODE };
 /** P2Flux's fee on an x402 payment: 1%, never less than the deployment's `MIN_FEE`. */
 export declare const X402_FEE_BPS = 100n;
 /** Mirrors `maxFee` in the contract: the most the relayer may take from a payment of `amount`. */
@@ -78,3 +78,10 @@ export declare const x402Ref: (payer: Address, nonce: Hex) => Hex;
  * locally so that answering "where does this seller get paid" never costs a chain read.
  */
 export declare const x402VaultAddress: (splitter: Address, recipient: Address) => Address;
+/** Fee on a batch-settlement payout, basis points (P2FluxBatchVaults.FEE_BPS): 3%. */
+export declare const X402_BATCH_FEE_BPS = 300n;
+/**
+ * A seller's batch vault - the `receiver` of their x402 batch-settlement channels. Same vault code and
+ * derivation as the exact vault, from the P2FluxBatchVaults factory instead, so the address differs.
+ */
+export declare const batchVaultAddress: (batchVaults: Address, recipient: Address) => Address;
