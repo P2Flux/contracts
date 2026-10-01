@@ -48,11 +48,25 @@ contract GasRefillTest is Test {
         return new P2FluxGasRefill(_params(seq, FLOOR, 1 hours, 300));
     }
 
-    function _params(address seq, uint256 floor, uint256 age, uint256 slippage) internal view returns (P2FluxGasRefill.Params memory) {
+    function _params(address seq, uint256 floor, uint256 age, uint256 slippage)
+        internal
+        view
+        returns (P2FluxGasRefill.Params memory)
+    {
         return P2FluxGasRefill.Params({
-            usdc: address(usdc), weth: address(weth), treasury: treasury, relayer: relayer, router: address(router), poolFee: 500,
-            ethUsdFeed: address(feed), sequencerFeed: seq, refillBelowWei: floor, maxOracleAge: age,
-            dailyCapUsdc: CAP, maxTargetWei: CEILING, maxSlippageBps: slippage
+            usdc: address(usdc),
+            weth: address(weth),
+            treasury: treasury,
+            relayer: relayer,
+            router: address(router),
+            poolFee: 500,
+            ethUsdFeed: address(feed),
+            sequencerFeed: seq,
+            refillBelowWei: floor,
+            maxOracleAge: age,
+            dailyCapUsdc: CAP,
+            maxTargetWei: CEILING,
+            maxSlippageBps: slippage
         });
     }
 
@@ -235,8 +249,13 @@ contract GasRefillTest is Test {
 
     /// @notice Whoever calls, whatever target and pool rate: ETH only reaches the relayer, the treasury
     ///         loses at most the day's cap, never below the price allowance, the relayer never above the ceiling.
-    function testFuzz_refill_onlyEverPaysTheRelayer(address caller, uint256 target, uint256 rate, uint256 relayerStart) public {
-        vm.assume(caller != relayer && caller != address(refill) && caller != treasury && caller != address(weth) && caller != address(router));
+    function testFuzz_refill_onlyEverPaysTheRelayer(address caller, uint256 target, uint256 rate, uint256 relayerStart)
+        public
+    {
+        vm.assume(
+            caller != relayer && caller != address(refill) && caller != treasury && caller != address(weth)
+                && caller != address(router)
+        );
         rate = bound(rate, 0.0001 ether, 0.001 ether);
         relayerStart = bound(relayerStart, 0, FLOOR - 1);
         target = bound(target, 0, 100 ether);
@@ -295,9 +314,19 @@ contract GasRefillMainnetFork is Test {
         vm.createSelectFork(rpc);
         P2FluxGasRefill refill = new P2FluxGasRefill(
             P2FluxGasRefill.Params({
-                usdc: USDC, weth: WETH, treasury: TREASURY, relayer: RELAYER, router: ROUTER, poolFee: 500, ethUsdFeed: FEED,
-                sequencerFeed: SEQUENCER, refillBelowWei: 0.01 ether, maxOracleAge: 1 hours, dailyCapUsdc: 100_000_000,
-                maxTargetWei: 0.05 ether, maxSlippageBps: 300
+                usdc: USDC,
+                weth: WETH,
+                treasury: TREASURY,
+                relayer: RELAYER,
+                router: ROUTER,
+                poolFee: 500,
+                ethUsdFeed: FEED,
+                sequencerFeed: SEQUENCER,
+                refillBelowWei: 0.01 ether,
+                maxOracleAge: 1 hours,
+                dailyCapUsdc: 100_000_000,
+                maxTargetWei: 0.05 ether,
+                maxSlippageBps: 300
             })
         );
         deal(USDC, TREASURY, 1_000_000_000);
@@ -313,6 +342,7 @@ contract GasRefillMainnetFork is Test {
         emit log_named_uint("ETH out (wei)", out);
         emit log_named_uint("ETH/USD (8 dec)", refill.price());
     }
+
     /// @dev The live mainnet contract, the live treasury balance, and the API job's arithmetic for a
     ///      treasury short of the full target: it must spend no more than the treasury has.
     function test_fork_mainnet_liveContract_partialRefillSpendsOnlyWhatTreasuryHas() public {
