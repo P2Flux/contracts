@@ -313,4 +313,36 @@ contract GasRefillMainnetFork is Test {
         emit log_named_uint("ETH out (wei)", out);
         emit log_named_uint("ETH/USD (8 dec)", refill.price());
     }
+    /// @dev The live mainnet contract, the live treasury balance, and the API job's arithmetic for a
+    ///      treasury short of the full target: it must spend no more than the treasury has.
+    function test_fork_mainnet_liveContract_partialRefillSpendsOnlyWhatTreasuryHas() public {
+        string memory rpc = vm.envOr("BASE_MAINNET_RPC_URL", string(""));
+        if (bytes(rpc).length == 0) vm.skip(true);
+        vm.createSelectFork(rpc);
+        P2FluxGasRefill refill = P2FluxGasRefill(payable(0x78cb470600EA0D68cE846bfc3bB455786BF56537));
+        vm.prank(TREASURY);
+        (bool ok,) = USDC.call(abi.encodeWithSignature("approve(address,uint256)", address(refill), type(uint256).max));
+        assertTrue(ok);
+        (, bytes memory raw) = USDC.staticcall(abi.encodeWithSignature("balanceOf(address)", TREASURY));
+        uint256 held = abi.decode(raw, (uint256));
+        assertGt(held, 1_000_000, "treasury holds the user's USDC");
+        vm.deal(RELAYER, 0.0099 ether);
+        uint256 balance = RELAYER.balance;
+        uint256 target = 0.02 ether;
+        (uint256 needed,) = refill.quote(target);
+        assertGt(needed, held, "the full target costs more than the treasury has");
+        // The job's formula (gas-refill.ts): shrink the target so it costs usable * 98 %.
+        target = balance + ((target - balance) * held * 98) / (needed * 100);
+        (uint256 usdcIn,) = refill.quote(target);
+        assertLe(usdcIn, held);
+        assertGe(usdcIn, (held * 97) / 100);
+        uint256 out = refill.refill(target);
+        (, raw) = USDC.staticcall(abi.encodeWithSignature("balanceOf(address)", TREASURY));
+        assertEq(held - abi.decode(raw, (uint256)), usdcIn, "spent exactly the quote");
+        assertEq(RELAYER.balance, balance + out);
+        assertGe(out, (target - balance) * 9_700 / 10_000);
+        emit log_named_uint("treasury USDC held", held);
+        emit log_named_uint("USDC spent", usdcIn);
+        emit log_named_uint("ETH out (wei)", out);
+    }
 }
