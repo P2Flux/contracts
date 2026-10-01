@@ -141,12 +141,15 @@ describe('x402 settlement', () => {
 
   test('a replay is refused in simulation, with a decodable reason, before any gas is spent', async () => {
     const p = await agentPays(h.seller, 500_000n, 'replay')
-    await h.relayer.writeContract({
+    const first = await h.relayer.writeContract({
       address: splitter,
       abi: p2fluxX402SplitterAbi,
       functionName: 'settleWithAuthorization',
       args: [h.seller, 0n, p.authorization, p.signature],
     })
+    // Mined first: newer anvil returns the hash before the block is sealed, and a replay simulated
+    // against the previous block is not yet a replay.
+    await h.chain.waitForTransactionReceipt({ hash: first })
     await assert.rejects(
       h.chain.simulateContract({
         account: h.relayer.account,
