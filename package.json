@@ -52,7 +52,7 @@
     "x402:check": "tsx scripts/sync-x402.ts --check"
   },
   "dependencies": {
-    "viem": "^2.21.0"
+    "viem": "^2.56.9"
   },
   "devDependencies": {
     "@openzeppelin/contracts": "^5.6.1",
