@@ -291,16 +291,16 @@
     "reference": "https://github.com/crytic/slither/wiki/Detector-Documentation#dangerous-strict-equalities"
   },
   {
-    "id": "a275386eecd6104149c6f9c75a330595952f6d73a33b467108b3d472221b8267",
+    "id": "93d23c6658f6c06bb2a31b44e669af1d022ea2861d1d86420c77a5004f249fd1",
     "check": "arbitrary-send-erc20",
     "impact": "High",
-    "first_line": "P2FluxGasRefill.refill(uint256) (contracts/P2FluxGasRefill.sol#179-214) uses arbitrary from in transferFrom: usdc.safeTransferFrom(treasury,address(th"
+    "first_line": "P2FluxGasRefill.refill(uint256) (contracts/P2FluxGasRefill.sol#179-215) uses arbitrary from in transferFrom: usdc.safeTransferFrom(treasury,address(th"
   },
   {
     "id": "fc58e9b36f56c5da3a495e01b38e7338413a7a0be077bad3fac269e5a986aa32",
     "check": "incorrect-equality",
     "impact": "Medium",
-    "first_line": "P2FluxGasRefill.refill(uint256) (contracts/P2FluxGasRefill.sol#179-214) uses a dangerous strict equality:"
+    "first_line": "P2FluxGasRefill.refill(uint256) (contracts/P2FluxGasRefill.sol#179-215) uses a dangerous strict equality:"
   },
   {
     "id": "102fe06d47fba0ec9503496977642c732b7d349ba5fbbc54447075640a925460",
@@ -318,7 +318,7 @@
     "id": "e32199a2d1011af41cc60885f412c2ee467e94a88db65b13d6ea5bc373f3b864",
     "check": "timestamp",
     "impact": "Low",
-    "first_line": "P2FluxGasRefill.refill(uint256) (contracts/P2FluxGasRefill.sol#179-214) uses timestamp for comparisons"
+    "first_line": "P2FluxGasRefill.refill(uint256) (contracts/P2FluxGasRefill.sol#179-215) uses timestamp for comparisons"
   },
   {
     "id": "ef49b69cb5110a4fb2547b27fb629da8690e004dde20ca87a798eaece69be963",

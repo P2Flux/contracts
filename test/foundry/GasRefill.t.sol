@@ -126,6 +126,33 @@ contract GasRefillTest is Test {
         assertEq(relayer.balance, 1 ether);
     }
 
+    function test_setLimits_capLoweredBelowTodaysSpend_isUsedUp_notAnError() public {
+        refill.refill(0.02 ether); // 45 USDC spent today
+        vm.prank(treasury);
+        refill.setLimits(10_000_000, CEILING, 300); // below what was spent
+        vm.deal(relayer, 0);
+        vm.expectRevert(P2FluxGasRefill.DailyLimit.selector);
+        refill.refill(0.02 ether);
+        vm.warp(block.timestamp + 1 days);
+        feed.set(PRICE, block.timestamp);
+        refill.refill(0.02 ether); // the next day, within the new cap
+        assertEq(refill.spentToday(), 10_000_000);
+    }
+
+    /// @notice A relayer that could re-enter from its own receive() gets nothing twice.
+    function test_refill_relayerCannotReenter() public {
+        ReenteringRelayer evil = new ReenteringRelayer();
+        P2FluxGasRefill.Params memory p = _params(address(0), FLOOR, 1 hours, 300);
+        p.relayer = payable(address(evil));
+        P2FluxGasRefill r = new P2FluxGasRefill(p);
+        evil.arm(r);
+        vm.prank(treasury);
+        usdc.approve(address(r), type(uint256).max);
+        r.refill(0.02 ether);
+        assertEq(address(evil).balance, 0.02 ether);
+        assertEq(evil.reentered(), 1, "the re-entry was attempted once and refused");
+    }
+
     function test_refill_neverMoreThanTheTreasuryAllowed() public {
         vm.prank(treasury);
         usdc.approve(address(refill), 1_000_000);
@@ -230,6 +257,23 @@ contract GasRefillTest is Test {
         }
         assertEq(caller.balance, callerEth);
         assertEq(address(refill).balance, 0);
+    }
+}
+
+/// @notice A relayer that tries to refill again from inside receiving ETH.
+contract ReenteringRelayer {
+    P2FluxGasRefill internal refill;
+    uint256 public reentered;
+
+    function arm(P2FluxGasRefill r) external {
+        refill = r;
+    }
+
+    receive() external payable {
+        reentered++;
+        try refill.refill(1 ether) {
+            revert("re-entry must fail");
+        } catch {}
     }
 }
 

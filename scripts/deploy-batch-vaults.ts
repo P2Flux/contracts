@@ -64,7 +64,7 @@ if (plan.initcodeKeccak && plan.initcodeKeccak !== initcode) {
   throw new Error(`out/P2FluxBatchVaults.json builds ${initcode}, the manifest approved ${plan.initcodeKeccak}: recompile from the approved commit`)
 }
 if (plan.sha256) console.log('batch manifest sha256', plan.sha256)
-if (process.env.DRY_RUN) process.exit(0)
+if (process.env.DRY_RUN === '1') process.exit(0)
 
 const wallet = createWalletClient({ account: deployer, chain: viemChain, transport: http(rpc) })
 const hash = await wallet.deployContract({ abi, bytecode, args: [token, feeWallet] })

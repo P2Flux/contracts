@@ -185,7 +185,8 @@ contract P2FluxGasRefill is ReentrancyGuard {
         }
         (uint256 usdcIn,) = quote(targetWei);
         if (usdcIn == 0) revert NotNeeded();
-        uint256 left = dailyCapUsdc - spentToday;
+        // A cap lowered below what was already spent today is simply used up, not an arithmetic error.
+        uint256 left = dailyCapUsdc > spentToday ? dailyCapUsdc - spentToday : 0;
         if (left < MIN_REFILL_USDC) revert DailyLimit();
         if (usdcIn > left) usdcIn = left;
         spentToday += usdcIn;

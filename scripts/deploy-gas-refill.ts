@@ -85,7 +85,7 @@ const poolWeth = /^0x0+$/.test(pool) ? 0n : await chain.readContract({ address: 
 if (poolWeth < parseEther('1')) throw new Error(`the USDC/WETH ${params.poolFee} pool ${pool} holds ${formatEther(poolWeth)} WETH - too thin to swap through`)
 console.log(`pool      ${pool} (${formatEther(poolWeth)} WETH)`)
 const { abi, bytecode } = JSON.parse(readFileSync(new URL('../out/P2FluxGasRefill.json', import.meta.url), 'utf8')) as { abi: unknown[]; bytecode: Hex }
-const nonce = await chain.getTransactionCount({ address: deployer.address })
+const nonce = await chain.getTransactionCount({ address: deployer.address, blockTag: 'pending' })
 const predicted = getContractAddress({ from: deployer.address, nonce: BigInt(nonce) })
 console.log(`deployer  ${deployer.address} (${formatEther(await chain.getBalance({ address: deployer.address }))} ETH)`)
 console.log(`treasury  ${treasuryAddr}\nrelayer   ${relayerAddr}\nthreshold ${formatEther(belowWei)} ETH\npredicted ${predicted}`)
@@ -93,7 +93,7 @@ if (expected && expected.toLowerCase() !== predicted.toLowerCase()) throw new Er
 const initcode = refillInitcodeKeccak({ abi, bytecode }, args as never)
 if (pinnedInitcode && pinnedInitcode !== initcode) throw new Error(`out/P2FluxGasRefill.json builds ${initcode}, the manifest approved ${pinnedInitcode}: recompile from the approved commit`)
 console.log('initcode keccak', initcode)
-if (process.env.DRY_RUN) process.exit(0)
+if (process.env.DRY_RUN === '1') process.exit(0)
 
 const wallet = createWalletClient({ account: deployer, chain: viemChain, transport: http(rpc) })
 const hash = await wallet.deployContract({ abi, bytecode, args: args as never })
