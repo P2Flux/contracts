@@ -7,14 +7,14 @@
  *     DEPLOYER_PK=... npx tsx scripts/deploy-gas-refill.ts                                   # Base Mainnet
  *
  * Test parameters: the treasury is the test admin wallet (it approves the contract itself afterwards),
- * the relayer is the api-test relayer, 1 USDC per refill, at most 3 a day, 3 % price allowance against
- * Chainlink, price at most 3 h old, Uniswap v3 USDC/WETH 0.3 % pool (the deepest on Sepolia).
- * GAS_REFILL_BELOW_WEI sets the threshold (default 0.003 ETH). Base Mainnet: a manifest, like every
+ * the relayer is the api-test relayer, top-up ceiling 0.05 ETH, 5 USDC a day, 3 % price allowance against
+ * Chainlink, price at most 1 h old, no sequencer feed (Base Sepolia has none), Uniswap v3 USDC/WETH 0.3 %
+ * pool (the deepest on Sepolia). GAS_REFILL_BELOW_WEI sets the floor (default 0.01 ETH). Base Mainnet: a manifest, like every
  * other contract: everything comes from the approved manifest. DRY_RUN=1 checks and sends nothing.
  * Prints no keys.
  */
 import { readFileSync } from 'node:fs'
-import { createPublicClient, createWalletClient, formatEther, getContractAddress, http, parseEther, type Address, type Hex } from 'viem'
+import { createPublicClient, createWalletClient, formatEther, getContractAddress, http, parseAbi, parseEther, type Address, type Hex } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { base, baseSepolia } from 'viem/chains'
 import { loadManifest } from './manifest.js'
@@ -62,15 +62,28 @@ if (MAINNET) {
 } else {
   const treasury = (process.env.GAS_REFILL_TREASURY || deployer.address) as Address
   const relayer = privateKeyToAccount(need('RELAYER_PK') as Hex).address
-  const below = BigInt(process.env.GAS_REFILL_BELOW_WEI || parseEther('0.003').toString())
-  args = [SEPOLIA.usdc, SEPOLIA.weth, treasury, relayer, SEPOLIA.router, SEPOLIA.poolFee, SEPOLIA.feed, 1_000_000n, below, 3n, 300n, 3n * 3600n]
+  const below = BigInt(process.env.GAS_REFILL_BELOW_WEI || parseEther('0.01').toString())
+  args = [{
+    usdc: SEPOLIA.usdc, weth: SEPOLIA.weth, treasury, relayer, router: SEPOLIA.router, poolFee: SEPOLIA.poolFee, ethUsdFeed: SEPOLIA.feed,
+    sequencerFeed: '0x0000000000000000000000000000000000000000', refillBelowWei: below, maxOracleAge: 3600n,
+    dailyCapUsdc: 5_000_000n, maxTargetWei: parseEther('0.05'), maxSlippageBps: 300n,
+  }]
 }
-const [usdcAddr, wethAddr, treasuryAddr, relayerAddr, routerAddr, , feedAddr, , belowWei] = args as [Address, Address, Address, Address, Address, number, Address, bigint, bigint]
+const params = args[0] as { usdc: Address; weth: Address; treasury: Address; relayer: Address; router: Address; poolFee: number; ethUsdFeed: Address; sequencerFeed: Address; refillBelowWei: bigint }
+const { usdc: usdcAddr, weth: wethAddr, treasury: treasuryAddr, relayer: relayerAddr, router: routerAddr, ethUsdFeed: feedAddr, refillBelowWei: belowWei } = params
 
 for (const [name, address] of [['USDC', usdcAddr], ['WETH', wethAddr], ['router', routerAddr], ['feed', feedAddr]] as const) {
   const code = await chain.getCode({ address })
   if (!code || code === '0x') throw new Error(`no contract at ${name} ${address}`)
 }
+// The feed must be the 8-decimal USD price the contract's arithmetic assumes, and the pool must exist with liquidity.
+const feedDecimals = await chain.readContract({ address: feedAddr, abi: parseAbi(['function decimals() view returns (uint8)']), functionName: 'decimals' })
+if (feedDecimals !== 8) throw new Error(`the ETH/USD feed has ${feedDecimals} decimals, not 8`)
+const FACTORY = MAINNET ? '0x33128a8fC17869897dcE68Ed026d694621f6FDfD' : '0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24'
+const pool = await chain.readContract({ address: FACTORY, abi: parseAbi(['function getPool(address,address,uint24) view returns (address)']), functionName: 'getPool', args: [usdcAddr, wethAddr, params.poolFee] })
+const poolWeth = /^0x0+$/.test(pool) ? 0n : await chain.readContract({ address: wethAddr, abi: parseAbi(['function balanceOf(address) view returns (uint256)']), functionName: 'balanceOf', args: [pool] })
+if (poolWeth < parseEther('1')) throw new Error(`the USDC/WETH ${params.poolFee} pool ${pool} holds ${formatEther(poolWeth)} WETH - too thin to swap through`)
+console.log(`pool      ${pool} (${formatEther(poolWeth)} WETH)`)
 const { abi, bytecode } = JSON.parse(readFileSync(new URL('../out/P2FluxGasRefill.json', import.meta.url), 'utf8')) as { abi: unknown[]; bytecode: Hex }
 const nonce = await chain.getTransactionCount({ address: deployer.address })
 const predicted = getContractAddress({ from: deployer.address, nonce: BigInt(nonce) })

@@ -291,27 +291,39 @@
     "reference": "https://github.com/crytic/slither/wiki/Detector-Documentation#dangerous-strict-equalities"
   },
   {
-    "id": "f4a5f012209e5eb47b8fd85255c197e55c8552fcd6d7849494e38f6b6dd6d271",
+    "id": "a275386eecd6104149c6f9c75a330595952f6d73a33b467108b3d472221b8267",
     "check": "arbitrary-send-erc20",
     "impact": "High",
-    "first_line": "P2FluxGasRefill.refill() (contracts/P2FluxGasRefill.sol#128-158) uses arbitrary from in transferFrom: usdc.safeTransferFrom(treasury,address(this),ref"
+    "first_line": "P2FluxGasRefill.refill(uint256) (contracts/P2FluxGasRefill.sol#179-214) uses arbitrary from in transferFrom: usdc.safeTransferFrom(treasury,address(th"
   },
   {
-    "id": "1434f2922332ce24e5661ebb4732f1e49f74635ec1b0c9a296d19b22ce3d3950",
+    "id": "fc58e9b36f56c5da3a495e01b38e7338413a7a0be077bad3fac269e5a986aa32",
+    "check": "incorrect-equality",
+    "impact": "Medium",
+    "first_line": "P2FluxGasRefill.refill(uint256) (contracts/P2FluxGasRefill.sol#179-214) uses a dangerous strict equality:"
+  },
+  {
+    "id": "102fe06d47fba0ec9503496977642c732b7d349ba5fbbc54447075640a925460",
     "check": "unused-return",
     "impact": "Medium",
-    "first_line": "P2FluxGasRefill.minEthOut() (contracts/P2FluxGasRefill.sol#118-125) ignores return value by (None,answer,None,updatedAt,None) = ethUsdFeed.latestRound"
+    "first_line": "P2FluxGasRefill.price() (contracts/P2FluxGasRefill.sol#155-165) ignores return value by (None,answer,None,updatedAt,None) = ethUsdFeed.latestRoundData"
   },
   {
-    "id": "1076e347314c338371db63061817949ee89ff6edbfa8139778340341511dab3f",
-    "check": "timestamp",
-    "impact": "Low",
-    "first_line": "P2FluxGasRefill.minEthOut() (contracts/P2FluxGasRefill.sol#118-125) uses timestamp for comparisons"
+    "id": "e86155effbdb651ae314be89af778b79880b7d607fda37fe93d3e1d1523252b1",
+    "check": "unused-return",
+    "impact": "Medium",
+    "first_line": "P2FluxGasRefill.price() (contracts/P2FluxGasRefill.sol#155-165) ignores return value by (None,status,upSince,None,None) = sequencerFeed.latestRoundDat"
   },
   {
-    "id": "9af087b9124f8adb3ebd8aa8c41a8b319f5d87b5b9eea41e6659c902c97abd74",
+    "id": "e32199a2d1011af41cc60885f412c2ee467e94a88db65b13d6ea5bc373f3b864",
     "check": "timestamp",
     "impact": "Low",
-    "first_line": "P2FluxGasRefill.refill() (contracts/P2FluxGasRefill.sol#128-158) uses timestamp for comparisons"
+    "first_line": "P2FluxGasRefill.refill(uint256) (contracts/P2FluxGasRefill.sol#179-214) uses timestamp for comparisons"
+  },
+  {
+    "id": "ef49b69cb5110a4fb2547b27fb629da8690e004dde20ca87a798eaece69be963",
+    "check": "timestamp",
+    "impact": "Low",
+    "first_line": "P2FluxGasRefill.price() (contracts/P2FluxGasRefill.sol#155-165) uses timestamp for comparisons"
   }
 ]

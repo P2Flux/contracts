@@ -57,9 +57,10 @@ const files: [string, Record<string, string>][] = [
     const m: Record<string, string> = {
       ...head, RELAYER: main.RELAYER, GAS_TREASURY: main.GAS_TREASURY, USDC: main.USDC,
       ...BASE_MAINNET_THIRD_PARTY, POOL_FEE: '500',
-      // 10 USDC per refill (~0.0037 ETH), when the relayer is below 0.003 ETH, at most 3 a day,
-      // at least the Chainlink price less 3 %, from a price at most 3 hours old.
-      REFILL_USDC_UNITS: '10000000', REFILL_BELOW_WEI: '3000000000000000', MAX_REFILLS_PER_DAY: '3', MAX_SLIPPAGE_BPS: '300', MAX_ORACLE_AGE_SECONDS: '10800',
+      // Below 0.01 ETH the relayer is topped up to a target the API asks for (at most 0.05 ETH), with at
+      // most 100 USDC a day, at least the Chainlink price less 3 %, from a price at most 1 hour old.
+      // The treasury raises the cap and the ceiling later with setLimits, as traffic grows.
+      REFILL_BELOW_WEI: '10000000000000000', MAX_ORACLE_AGE_SECONDS: '3600', DAILY_CAP_USDC_UNITS: '100000000', MAX_TARGET_WEI: '50000000000000000', MAX_SLIPPAGE_BPS: '300',
       GAS_REFILL_EXPECTED_ADDRESS: getContractAddress({ from: addr(main.DEPLOYER), nonce: nonce + 2n }),
     }
     m.GAS_REFILL_INITCODE_KECCAK = refillInitcodeKeccak(artifact('P2FluxGasRefill'), refillArgs(m as never))

@@ -51,17 +51,28 @@ contract MockRouter {
     }
 }
 
-/// @notice A Chainlink-like feed with a settable answer and timestamp.
+/// @notice A Chainlink-like feed: settable answer, startedAt, updatedAt and decimals.
 contract MockFeed {
     int256 public answer;
+    uint256 public startedAt;
     uint256 public updatedAt;
+    uint8 public decimals = 8;
 
     function set(int256 _answer, uint256 _updatedAt) external {
         answer = _answer;
+        startedAt = _updatedAt;
         updatedAt = _updatedAt;
     }
 
+    function setStarted(uint256 _startedAt) external {
+        startedAt = _startedAt;
+    }
+
+    function setDecimals(uint8 _decimals) external {
+        decimals = _decimals;
+    }
+
     function latestRoundData() external view returns (uint80, int256, uint256, uint256, uint80) {
-        return (1, answer, updatedAt, updatedAt, 1);
+        return (1, answer, startedAt, updatedAt, 1);
     }
 }
