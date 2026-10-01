@@ -5,8 +5,9 @@
  *
  *   npx tsx scripts/write-agent-manifests.ts
  *
- * The splitter is deployed first (deployer nonce N), the vaults second (N+1). Any other transaction
- * from the deployer in between changes both addresses: rerun this and approve the new hashes.
+ * The splitter is deployed first (deployer nonce N), the vaults second (N+1), the gas refill third
+ * (N+2). Any other transaction from the deployer in between changes the addresses: rerun this and
+ * approve the new hashes.
  */
 import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -16,6 +17,7 @@ import { X402_UPTO_PROXY } from '../src/x402.js'
 import { batchInitcodeKeccak, loadBatchManifest } from './batch-manifest.js'
 import { addr, loadManifest } from './manifest.js'
 import { loadX402Manifest, x402InitcodeKeccak } from './x402-manifest.js'
+import { BASE_MAINNET_THIRD_PARTY, loadRefillManifest, refillArgs, refillInitcodeKeccak } from './refill-manifest.js'
 
 const MAIN = process.env.DEPLOY_MANIFEST || 'manifests/base-mainnet.manifest'
 const main = loadManifest(MAIN)
@@ -51,6 +53,18 @@ const files: [string, Record<string, string>][] = [
     BATCH_VAULTS_EXPECTED_ADDRESS: getContractAddress({ from: addr(main.DEPLOYER), nonce: nonce + 1n }),
     BATCH_VAULTS_INITCODE_KECCAK: batchInitcodeKeccak(artifact('P2FluxBatchVaults'), { token, feeWallet }),
   }],
+  ['manifests/base-mainnet-gas-refill.manifest', ((): Record<string, string> => {
+    const m: Record<string, string> = {
+      ...head, RELAYER: main.RELAYER, GAS_TREASURY: main.GAS_TREASURY, USDC: main.USDC,
+      ...BASE_MAINNET_THIRD_PARTY, POOL_FEE: '500',
+      // 10 USDC per refill (~0.0037 ETH), when the relayer is below 0.003 ETH, at most 3 a day,
+      // at least the Chainlink price less 3 %, from a price at most 3 hours old.
+      REFILL_USDC_UNITS: '10000000', REFILL_BELOW_WEI: '3000000000000000', MAX_REFILLS_PER_DAY: '3', MAX_SLIPPAGE_BPS: '300', MAX_ORACLE_AGE_SECONDS: '10800',
+      GAS_REFILL_EXPECTED_ADDRESS: getContractAddress({ from: addr(main.DEPLOYER), nonce: nonce + 2n }),
+    }
+    m.GAS_REFILL_INITCODE_KECCAK = refillInitcodeKeccak(artifact('P2FluxGasRefill'), refillArgs(m as never))
+    return m
+  })()],
 ]
 console.log(`deployer ${main.DEPLOYER} nonce ${nonce}`)
 for (const [path, values] of files) {
@@ -59,6 +73,7 @@ for (const [path, values] of files) {
   const sha = createHash('sha256').update(body).digest('hex')
   // Round trip through the loader the deploy script uses: a file it would refuse is not written quietly.
   if (path.includes('x402')) loadX402Manifest(path, MAIN, sha)
-  else loadBatchManifest(path, MAIN, sha)
-  console.log(`${path}\n  sha256 ${sha}\n  address ${values.X402_SPLITTER_EXPECTED_ADDRESS ?? values.BATCH_VAULTS_EXPECTED_ADDRESS}`)
+  else if (path.includes('batch')) loadBatchManifest(path, MAIN, sha)
+  else loadRefillManifest(path, MAIN, sha)
+  console.log(`${path}\n  sha256 ${sha}\n  address ${values.X402_SPLITTER_EXPECTED_ADDRESS ?? values.BATCH_VAULTS_EXPECTED_ADDRESS ?? values.GAS_REFILL_EXPECTED_ADDRESS}`)
 }
