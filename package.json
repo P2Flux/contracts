@@ -1,6 +1,6 @@
 {
   "name": "@p2flux/contracts",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "P2Flux protocol: Solidity contracts, ABIs, EIP-712 definitions and public chain constants.",
   "license": "MIT",
   "type": "module",
