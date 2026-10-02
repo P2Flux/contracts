@@ -3,6 +3,10 @@ export const BASE_SEPOLIA = {
     chainId: 84532,
     /** Circle USDC, FiatTokenV2_2, 6 decimals. */
     usdc: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+    /** P2FluxX402Splitter v2 (AI agent payments, x402 exact and upto). Code checked on-chain 2026-10-02. */
+    x402Splitter: '0x12Ae2c266014EB2A181024D12be9C4e5F468f7c8',
+    /** P2FluxBatchVaults (prepaid agent payments, 3%). Code checked on-chain 2026-10-02. */
+    batchVaults: '0x08EbEb85c53895F752bdAc9C115aF33FCff04F3E',
     explorer: 'https://sepolia.basescan.org',
 };
 /**
@@ -37,6 +41,16 @@ export const BASE_MAINNET = {
      */
     gasSponsor: '0xD1DDAaa301403d18fD4A23Fc69493ef48af90285',
     gasSponsorDeployBlock: 50966742,
+    /**
+     * P2FluxX402Splitter (AI agent payments, x402 exact and upto), deployed 2026-10-01 from manifest
+     * sha256 4065edac…8232 (tx 0x111774a3...b952, deployer nonce 4), Sourcify exact_match.
+     */
+    x402Splitter: '0x9A11CE97eaE8674a70487b1D18C06b1C7f654Ec1',
+    x402SplitterDeployBlock: 52031062,
+    /** P2FluxBatchVaults (prepaid agent payments, 3%), deployed 2026-10-01 from manifest b4aa7509…9c67 (nonce 5). */
+    batchVaults: '0xa62eDD9B45a0564a63C248564335BA7B2E3877A4',
+    /** P2FluxGasRefill (keeps the relayer in gas from the gas treasury's USDC), 2026-10-01, manifest 48bebefb…2adc (nonce 6). */
+    gasRefill: '0x78cb470600EA0D68cE846bfc3bB455786BF56537',
     explorer: 'https://basescan.org',
 };
 /** The chains this protocol is deployed to, by id. */

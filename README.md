@@ -12,9 +12,20 @@ dependency; a protocol change happens here, gets a tag, and core bumps the pin.
 |---|---|
 | `P2FluxSplitter` | one-time payments: settles a payment in a single transaction, splitting the fee from the merchant's share. Holds no balance between calls; no withdrawals, no custody, no upgrade path. |
 | `P2FluxRecurring` | recurring payments: charges a customer-signed EIP-712 authorization once per period, reimbursing the relayer's measured gas cost. Not upgradeable, not proxied, no `delegatecall`. |
+| `P2FluxSponsoredSplitter` | one-time payments for a buyer with USDC and no ETH: the buyer signs, the relayer sends, and the buyer pays the network fee in USDC. |
+| `P2FluxGasSponsor` | lets a customer with no ETH start a subscription, restore an allowance or remove it, by signing. Collects the quoted network fee in the same transaction. |
+| `P2FluxX402Splitter` | AI agent payments (x402 `exact` and `upto`): pays into a per-seller vault, which pays the seller and the 1% fee. |
+| `P2FluxBatchVaults` | prepaid agent payments (x402 `batch-settlement`): per-seller vaults that pay the seller 97% and P2Flux 3%. |
+| `P2FluxGasRefill` | keeps the relayer in gas: swaps USDC from the gas treasury to ETH on Uniswap when the relayer runs low. |
 
-Both are immutable once deployed. The only mutable value in either is `P2FluxRecurring.relayer`,
-rotatable by the immutable `admin` so a compromised hot key can be replaced without redeploying.
+None is upgradeable or proxied. Two things can change after deployment:
+
+- `P2FluxRecurring.relayer`, rotatable by the immutable `admin` so a compromised hot key can be
+  replaced without redeploying.
+- `P2FluxGasRefill`'s limits - `dailyCapUsdc`, `maxTargetWei` and `maxSlippageBps` (never above 5%) -
+  through `setLimits`, callable only by the immutable `treasury` whose USDC it spends.
+
+Everything else is fixed at deployment.
 
 ## Using the TypeScript definitions
 
@@ -23,10 +34,16 @@ import { recurringAbi, recurringTypedData, RECURRING_FEE_BPS } from '@p2flux/con
 import { splitterAbi, paymentIdFor } from '@p2flux/contracts/splitter'
 import { BASE_SEPOLIA, usdc, formatUsdc } from '@p2flux/contracts/addresses'
 import { erc20Abi } from '@p2flux/contracts/abi'
+import { sponsoredSplitterAbi, gasSponsorAbi } from '@p2flux/contracts/sponsored'
+import { p2fluxX402SplitterAbi, p2fluxBatchVaultsAbi, x402VaultAddress } from '@p2flux/contracts/x402'
 ```
 
 Raw ABIs, if you would rather not take the package: `abi/P2FluxRecurring.json`,
-`abi/P2FluxSplitter.json`. They are build output of the `.sol` files here — `npm run abi:check`
+`abi/P2FluxSplitter.json`, `abi/P2FluxSponsoredSplitter.json`, `abi/P2FluxGasSponsor.json`,
+`abi/P2FluxX402Splitter.json` (also as `@p2flux/contracts/artifacts/<name>.json`).
+`P2FluxBatchVaults` has no JSON file; its ABI is `p2fluxBatchVaultsAbi` in `@p2flux/contracts/x402`.
+`P2FluxGasRefill` has no published ABI; `npm run compile` writes it to `out/`.
+They are build output of the `.sol` files here — `npm run abi:check`
 fails if they have drifted from a fresh compile.
 
 The TypeScript ABIs in `src/` are hand-written subsets rather than the full compiled artifact, kept
@@ -73,7 +90,15 @@ Both contracts are relayer-only and immutable; `P2FluxSponsoredSplitter` charges
 merchant-funded 0.10 USDC fixed network fee as the native path, with a 0.25 USDC hard cap on any
 single sponsored fee. Sepolia: `0x876f7b98e8c06291ec916a3223a92038b0a8774f` / `0x2dc51643040d7c396f1199a0664ac095d4b89ec5`.
 
-Base Sepolia (chainId 84532) remains the test deployment. Deployment tooling that signs with
+**Base Sepolia (chainId 84532) — test:**
+
+| Contract | Address |
+|---|---|
+| P2FluxX402Splitter (v2) | [`0x12Ae2c266014EB2A181024D12be9C4e5F468f7c8`](https://sepolia.basescan.org/address/0x12Ae2c266014EB2A181024D12be9C4e5F468f7c8) |
+| P2FluxBatchVaults | [`0x08EbEb85c53895F752bdAc9C115aF33FCff04F3E`](https://sepolia.basescan.org/address/0x08EbEb85c53895F752bdAc9C115aF33FCff04F3E) |
+| USDC (Circle) | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
+
+Base Sepolia remains the test deployment. Deployment tooling that signs with
 a live key is deliberately not here — it belongs with the operator, in the private infrastructure.
 
 ## License

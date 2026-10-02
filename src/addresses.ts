@@ -3,6 +3,10 @@ export const BASE_SEPOLIA = {
   chainId: 84532,
   /** Circle USDC, FiatTokenV2_2, 6 decimals. */
   usdc: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+  /** P2FluxX402Splitter v2 (AI agent payments, x402 exact and upto). Code checked on-chain 2026-10-02. */
+  x402Splitter: '0x12Ae2c266014EB2A181024D12be9C4e5F468f7c8',
+  /** P2FluxBatchVaults (prepaid agent payments, 3%). Code checked on-chain 2026-10-02. */
+  batchVaults: '0x08EbEb85c53895F752bdAc9C115aF33FCff04F3E',
   explorer: 'https://sepolia.basescan.org',
 } as const
 
