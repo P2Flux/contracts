@@ -74,8 +74,9 @@ contract P2FluxTronVault {
 }
 
 /// @title P2FluxTronVaults
-/// @notice One-time USDT payments on Tron: each merchant receives at its own vault; payouts move the vault's
-///         balance to the merchant in batches, with the P2Flux fee split out on chain.
+/// @notice USDT payments on Tron: each merchant receives at its own vault; payouts move the vault's balance
+///         to the merchant in batches, with the P2Flux fee split out on chain. One-time payments arrive as
+///         plain transfers; subscriptions are pulled into the same vault by `charge`.
 ///
 /// @dev Why vaults and not `approve` + `pay` as on Base: on Tron every token movement costs real money
 ///      (~65,000 energy, ~$2 for a USDT transfer), and an approve costs as much again. A buyer paying the
@@ -91,7 +92,16 @@ contract P2FluxTronVault {
 ///        - A payout is ONE transfer (to the merchant). P2Flux's share stays reserved in the vault and is
 ///          collected later (`collect`, anyone), then leaves to destinations fixed at deployment (`sweep`).
 ///
-///      Not upgradeable, no owner, no pause, no withdrawal path besides the ones above.
+///      Subscriptions (`charge`), as `P2FluxRecurring` on Base: the buyer approves this contract once and
+///      signs the exact terms once (TIP-712, Tron's EIP-712); each period anyone may charge exactly those
+///      terms, once. Unlike Base, a charge is ONE transfer - payer to the merchant's vault - because each
+///      transfer costs the buyer ~$2 in reimbursed energy. The subscription fee (2% + NETWORK_FEE) and the
+///      reimbursement are recorded as P2Flux's (`pending`) and leave with the vault's next payout, which
+///      takes no 1% again from subscription money.
+///
+///      Not upgradeable, no pause, no withdrawal path besides the ones above. The admin (cold key) can only
+///      rotate the relayer: subscription signatures commit to this contract's address, so a stolen relayer
+///      key must be replaceable without a redeploy.
 contract P2FluxTronVaults {
     /// @notice P2Flux's fee on every payout: 1%, the same as a one-time payment on Base.
     uint16 public constant FEE_BPS = 100;
@@ -103,11 +113,46 @@ contract P2FluxTronVaults {
     /// @notice What a payout leaves in the vault on top of the reserved shares: one unit. On Tron, a transfer
     ///         to an address holding no USDT costs about twice as much energy.
     uint256 public constant VAULT_FLOOR = 1;
+    /// @notice Subscriptions: P2Flux's fee (2%) and flat network fee per charge, both out of the signed
+    ///         amount, as on Base.
+    uint16 public constant RECURRING_FEE_BPS = 200;
+    uint256 public constant NETWORK_FEE = 0.10e6;
+    /// @notice The most a charge may add for the relayer's energy, whatever was signed: 5 USDT. A charge
+    ///         costs ~$2.5 of TRX today.
+    uint256 public constant GAS_REIMBURSEMENT_HARD_CAP = 5e6;
+
+    /// @notice The exact recurring terms the buyer signs; the same type as `P2FluxRecurring` on Base.
+    struct RecurringAuthorization {
+        address payer;
+        address recipient;
+        address token;
+        uint256 amount;
+        uint48 period;
+        uint48 start;
+        uint48 end;
+        bytes32 salt;
+        uint256 maxGasReimbursement;
+    }
+
+    bytes32 public constant AUTHORIZATION_TYPEHASH = keccak256(
+        "RecurringAuthorization(address payer,address recipient,address token,uint256 amount,uint48 period,uint48 start,uint48 end,bytes32 salt,uint256 maxGasReimbursement)"
+    );
+    bytes32 private constant DOMAIN_TYPEHASH =
+        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+
+    /// @notice Subscription money a vault holds that is P2Flux's (fee, network fee + reimbursement), and how
+    ///         much of the rest already paid its fee. Settled into the vault at its next payout.
+    struct Pending {
+        uint256 fee;
+        uint256 payoutFee;
+        uint256 feePaid;
+    }
 
     address public immutable token;
     address public immutable feeWallet;
     address public immutable gasTreasury;
-    address public immutable relayer;
+    address public immutable admin;
+    address public relayer;
     /// @notice The vault implementation every merchant's proxy delegates to.
     address public immutable implementation;
     /// @dev CREATE2 address prefix: 0x41 on the Tron VM, 0xff on Ethereum VMs (tests).
@@ -116,11 +161,27 @@ contract P2FluxTronVaults {
     uint256 public accruedFees;
     uint256 public accruedPayoutFees;
     mapping(address merchant => uint256) public lastPaidPayout;
+    mapping(address merchant => Pending) public pending;
+    /// @dev subscriptionId => index of the last charged period, plus one (0 = never charged).
+    mapping(bytes32 => uint256) public lastChargedPeriodPlusOne;
+    mapping(bytes32 => bool) public revoked;
 
     event VaultDeployed(address indexed merchant, address vault);
     event Payout(address indexed merchant, address indexed vault, uint256 amount, uint256 net, uint256 fee, uint256 payoutFee);
     event Collected(address indexed merchant, address indexed vault, uint256 fee, uint256 payoutFee);
     event Swept(uint256 fees, uint256 payoutFees);
+    event SubscriptionCharged(
+        bytes32 indexed subscriptionId,
+        address indexed payer,
+        address indexed recipient,
+        uint256 periodIndex,
+        uint256 net,
+        uint256 fee,
+        uint256 networkFee,
+        uint256 gasReimbursement
+    );
+    event SubscriptionRevoked(bytes32 indexed subscriptionId, address indexed payer);
+    event RelayerChanged(address relayer);
 
     error ZeroAddress();
     error ZeroAmount();
@@ -128,17 +189,47 @@ contract P2FluxTronVaults {
     error PayoutFeeTooHigh();
     error PaidPayoutTooSoon();
     error VaultMismatch();
+    error NotAdmin();
+    error TokenNotSupported();
+    error ZeroPeriod();
+    error InvalidEnd();
+    error NotStarted();
+    error Expired();
+    error Revoked();
+    error AlreadyRevoked();
+    error NotPayer();
+    error InvalidSignature();
+    error AlreadyChargedThisPeriod();
+    error GasReimbursementTooHigh();
+    error AmountTooSmall();
+    error TransferFailed();
 
-    constructor(address _token, address _feeWallet, address _gasTreasury, address _relayer, bytes1 _create2Prefix) {
-        if (_token == address(0) || _feeWallet == address(0) || _gasTreasury == address(0) || _relayer == address(0)) {
-            revert ZeroAddress();
-        }
+    constructor(
+        address _admin,
+        address _token,
+        address _feeWallet,
+        address _gasTreasury,
+        address _relayer,
+        bytes1 _create2Prefix
+    ) {
+        if (
+            _admin == address(0) || _token == address(0) || _feeWallet == address(0) || _gasTreasury == address(0)
+                || _relayer == address(0)
+        ) revert ZeroAddress();
+        admin = _admin;
         token = _token;
         feeWallet = _feeWallet;
         gasTreasury = _gasTreasury;
         relayer = _relayer;
         create2Prefix = _create2Prefix;
         implementation = address(new P2FluxTronVault());
+    }
+
+    function setRelayer(address _relayer) external {
+        if (msg.sender != admin) revert NotAdmin();
+        if (_relayer == address(0)) revert ZeroAddress();
+        relayer = _relayer;
+        emit RelayerChanged(_relayer);
     }
 
     /// @notice The merchant's vault: where buyers pay. Deterministic; deployed on its first payout.
@@ -151,8 +242,9 @@ contract P2FluxTronVaults {
     function payout(address merchant, uint256 payoutFee) external {
         if (merchant == address(0)) revert ZeroAddress();
         P2FluxTronVault vault = P2FluxTronVault(_deploy(merchant));
+        Pending memory p = pending[merchant];
         uint256 held = ITRC20(token).balanceOf(address(vault));
-        uint256 reserved = vault.reservedFee() + vault.reservedPayoutFee();
+        uint256 reserved = vault.reservedFee() + vault.reservedPayoutFee() + p.fee + p.payoutFee;
         if (held <= reserved + VAULT_FLOOR) revert ZeroAmount();
         uint256 amount = held - reserved - VAULT_FLOOR;
         if (payoutFee > 0) {
@@ -161,9 +253,13 @@ contract P2FluxTronVaults {
             if (block.timestamp < lastPaidPayout[merchant] + PAID_PAYOUT_INTERVAL) revert PaidPayoutTooSoon();
             lastPaidPayout[merchant] = block.timestamp;
         }
-        uint256 fee = (amount * FEE_BPS) / 10_000;
+        // Subscription money already paid its fee at `charge`.
+        uint256 feePaid = p.feePaid < amount ? p.feePaid : amount;
+        uint256 fee = ((amount - feePaid) * FEE_BPS) / 10_000;
         uint256 net = amount - fee - payoutFee;
-        vault.release(token, net, fee, payoutFee);
+        delete pending[merchant];
+        if (p.feePaid > feePaid) pending[merchant].feePaid = p.feePaid - feePaid;
+        vault.release(token, net, fee + p.fee, payoutFee + p.payoutFee);
         emit Payout(merchant, address(vault), amount, net, fee, payoutFee);
     }
 
@@ -187,6 +283,116 @@ contract P2FluxTronVaults {
         if (payoutFees > 0 && _trySend(gasTreasury, payoutFees)) accruedPayoutFees = 0;
         else payoutFees = 0;
         emit Swept(fees, payoutFees);
+    }
+
+    // --- subscriptions ------------------------------------------------------
+
+    /// @notice The TIP-712 digest of the terms; doubles as the subscription id (commits to this chain and
+    ///         this contract).
+    function subscriptionId(RecurringAuthorization calldata auth) public view returns (bytes32) {
+        bytes32 domain = keccak256(
+            abi.encode(DOMAIN_TYPEHASH, keccak256("P2FluxTronVaults"), keccak256("1"), block.chainid, address(this))
+        );
+        bytes32 structHash = keccak256(
+            abi.encode(
+                AUTHORIZATION_TYPEHASH,
+                auth.payer,
+                auth.recipient,
+                auth.token,
+                auth.amount,
+                auth.period,
+                auth.start,
+                auth.end,
+                auth.salt,
+                auth.maxGasReimbursement
+            )
+        );
+        return keccak256(abi.encodePacked(hex"1901", domain, structHash));
+    }
+
+    function isValidAuthorization(RecurringAuthorization calldata auth, bytes calldata signature)
+        external
+        view
+        returns (bool)
+    {
+        return _recover(subscriptionId(auth), signature) == auth.payer;
+    }
+
+    /// @notice Whether `charge` would currently pass its own preconditions (signature not checked).
+    function isChargeable(RecurringAuthorization calldata auth) external view returns (bool) {
+        if (auth.period == 0 || block.timestamp < auth.start) return false;
+        if (auth.end != 0 && block.timestamp >= auth.end) return false;
+        bytes32 id = subscriptionId(auth);
+        if (revoked[id]) return false;
+        return lastChargedPeriodPlusOne[id] < (block.timestamp - auth.start) / auth.period + 1;
+    }
+
+    /// @notice Charge the current period of a subscription into the merchant's vault. Callable by anyone;
+    ///         only the exact signed payment, once per period. Only the relayer may add `gasReimbursement`.
+    function charge(RecurringAuthorization calldata auth, bytes calldata signature, uint256 gasReimbursement)
+        external
+    {
+        if (auth.recipient == address(0) || auth.payer == address(0)) revert ZeroAddress();
+        if (auth.token != token) revert TokenNotSupported();
+        if (auth.amount == 0) revert ZeroAmount();
+        if (auth.period == 0) revert ZeroPeriod();
+        if (auth.end != 0 && auth.end <= auth.start) revert InvalidEnd();
+        if (block.timestamp < auth.start) revert NotStarted();
+        if (auth.end != 0 && block.timestamp >= auth.end) revert Expired();
+
+        bytes32 id = subscriptionId(auth);
+        if (revoked[id]) revert Revoked();
+        if (_recover(id, signature) != auth.payer) revert InvalidSignature();
+
+        uint256 periodIndex = (block.timestamp - auth.start) / auth.period;
+        if (lastChargedPeriodPlusOne[id] >= periodIndex + 1) revert AlreadyChargedThisPeriod();
+
+        uint256 reimbursement = msg.sender == relayer ? gasReimbursement : 0;
+        if (reimbursement > auth.maxGasReimbursement || reimbursement > GAS_REIMBURSEMENT_HARD_CAP) {
+            revert GasReimbursementTooHigh();
+        }
+
+        uint256 fee = (auth.amount * RECURRING_FEE_BPS) / 10_000;
+        if (auth.amount <= fee + NETWORK_FEE) revert AmountTooSmall();
+        uint256 net = auth.amount - fee - NETWORK_FEE;
+
+        lastChargedPeriodPlusOne[id] = periodIndex + 1;
+        Pending storage p = pending[auth.recipient];
+        p.fee += fee;
+        p.payoutFee += NETWORK_FEE + reimbursement;
+        p.feePaid += net;
+
+        // One transfer, payer -> the merchant's vault (deployed or not: its address is fixed). Judged by
+        // what arrived (see ITRC20).
+        address vault = vaultOf(auth.recipient);
+        uint256 total = auth.amount + reimbursement;
+        uint256 before = ITRC20(token).balanceOf(vault);
+        (bool ok,) = token.call(
+            abi.encodeWithSignature("transferFrom(address,address,uint256)", auth.payer, vault, total)
+        );
+        if (!ok || ITRC20(token).balanceOf(vault) != before + total) revert TransferFailed();
+
+        emit SubscriptionCharged(id, auth.payer, auth.recipient, periodIndex, net, fee, NETWORK_FEE, reimbursement);
+    }
+
+    /// @notice Cancel one subscription for good. Only the payer. Setting the allowance to zero stops all.
+    function revoke(RecurringAuthorization calldata auth) external {
+        if (msg.sender != auth.payer) revert NotPayer();
+        bytes32 id = subscriptionId(auth);
+        if (revoked[id]) revert AlreadyRevoked();
+        revoked[id] = true;
+        emit SubscriptionRevoked(id, auth.payer);
+    }
+
+    /// @dev Plain ECDSA (65-byte r,s,v), low-s only. Tron has no EIP-7702 and its wallets are keys.
+    function _recover(bytes32 digest, bytes calldata sig) private pure returns (address) {
+        if (sig.length != 65) return address(0);
+        bytes32 r = bytes32(sig[0:32]);
+        bytes32 s = bytes32(sig[32:64]);
+        uint8 v = uint8(sig[64]);
+        if (v < 27) v += 27;
+        if (uint256(s) > 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0) return address(0);
+        return ecrecover(digest, v, r, s);
     }
 
     function _salt(address merchant) private pure returns (bytes32) {
