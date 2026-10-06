@@ -4,11 +4,12 @@ pragma solidity 0.8.26;
 import {Test} from "forge-std/Test.sol";
 import {P2FluxTronVaults, P2FluxTronVault} from "../../contracts/tron/P2FluxTronVaults.sol";
 
-/// Tron's USDT, as far as these contracts can tell: `transfer` returns FALSE even when it moved the
-/// tokens, and the issuer can freeze any address (transfers to or from it revert).
+/// Tron's USDT, as far as these contracts can tell: `transfer` returns FALSE even when it moved the tokens,
+/// and the issuer can freeze any address (transfers to or from it revert).
 contract TronUsdtMock {
     mapping(address => uint256) public balanceOf;
     mapping(address => bool) public frozen;
+    uint256 public transfers;
     function mint(address to, uint256 v) external { balanceOf[to] += v; }
     function freeze(address a, bool f) external { frozen[a] = f; }
     function transfer(address to, uint256 v) external returns (bool) {
@@ -16,6 +17,7 @@ contract TronUsdtMock {
         require(balanceOf[msg.sender] >= v, "balance");
         balanceOf[msg.sender] -= v;
         balanceOf[to] += v;
+        transfers++;
         return false; // the quirk
     }
 }
@@ -34,37 +36,71 @@ contract TronVaultsTest is Test {
         vm.warp(1_800_000_000);
     }
 
-    function _pay(uint256 v) internal returns (address vault) {
-        vault = vaults.vaultOf(merchant);
-        usdt.mint(vault, v); // a buyer's plain transfer
+    function _vault() internal view returns (P2FluxTronVault) {
+        return P2FluxTronVault(vaults.vaultOf(merchant));
     }
 
-    function test_vault_address_is_predictable_and_deployed_there() public {
-        address predicted = _pay(10e6);
+    function _pay(uint256 v) internal {
+        usdt.mint(vaults.vaultOf(merchant), v); // a buyer's plain transfer
+    }
+
+    function test_vault_is_a_minimal_proxy_at_the_predicted_address() public {
+        address predicted = vaults.vaultOf(merchant);
+        _pay(10e6);
         vaults.payout(merchant, 0);
-        assertGt(predicted.code.length, 0, "deployed at the predicted address");
-        assertEq(P2FluxTronVault(predicted).merchant(), merchant);
-        assertEq(P2FluxTronVault(predicted).factory(), address(vaults));
+        assertEq(predicted.code.length, 45, "EIP-1167 runtime code");
+        assertEq(_vault().merchant(), merchant);
+        assertEq(_vault().factory(), address(vaults));
     }
 
-    function test_anyone_pays_out_free_merchant_gets_99_percent() public {
+    function test_vaults_of_different_merchants_differ() public view {
+        assertTrue(vaults.vaultOf(merchant) != vaults.vaultOf(address(0xB0B)));
+    }
+
+    function test_a_payout_is_one_transfer_and_p2flux_share_stays_reserved() public {
         _pay(10e6);
         _pay(5e6);
+        uint256 before = usdt.transfers();
         vm.prank(address(0xC0FFEE));
         vaults.payout(merchant, 0);
-        // 15 USDT in, one unit stays (VAULT_FLOOR): 14.999999 paid out, 1% of that is the fee.
+        assertEq(usdt.transfers() - before, 1, "only the merchant's transfer");
+        // 15 USDT in; one unit stays (VAULT_FLOOR); 1% of 14.999999 is reserved in the vault.
         assertEq(usdt.balanceOf(merchant), 14_999_999 - 149_999);
-        assertEq(vaults.accruedFees(), 149_999);
-        assertEq(usdt.balanceOf(address(vaults)), 149_999);
-        assertEq(usdt.balanceOf(vaults.vaultOf(merchant)), 1, 'one unit stays: the next buyer pays the cheaper rate');
+        assertEq(_vault().reservedFee(), 149_999);
+        assertEq(usdt.balanceOf(address(_vault())), 149_999 + 1);
+    }
+
+    function test_reserved_share_is_never_paid_out_again() public {
+        _pay(10e6);
+        vaults.payout(merchant, 0);
+        vm.expectRevert(P2FluxTronVaults.ZeroAmount.selector);
+        vaults.payout(merchant, 0); // only the reserve and the floor are left
+        _pay(10e6);
+        vaults.payout(merchant, 0);
+        assertEq(usdt.balanceOf(merchant), (9_999_999 - 99_999) + (10e6 - 100_000));
+        assertEq(_vault().reservedFee(), 99_999 + 100_000);
+    }
+
+    function test_collect_and_sweep_take_exactly_the_reserve() public {
+        _pay(100e6);
+        vm.prank(relayer);
+        vaults.payout(merchant, 3e6);
+        vm.prank(address(0xC0FFEE));
+        vaults.collect(merchant);
+        assertEq(_vault().reservedFee(), 0);
+        assertEq(usdt.balanceOf(address(_vault())), 1, "only the floor stays");
+        vaults.sweep();
+        assertEq(usdt.balanceOf(feeWallet), 999_999);
+        assertEq(usdt.balanceOf(gasTreasury), 3e6);
+        assertEq(usdt.balanceOf(address(vaults)), 0);
     }
 
     function test_relayer_charges_the_payout_cost_within_the_limits() public {
         _pay(50e6);
         vm.prank(relayer);
-        vaults.payout(merchant, 4_400_000);
-        assertEq(usdt.balanceOf(merchant), 49_999_999 - 499_999 - 4_400_000);
-        assertEq(vaults.accruedPayoutFees(), 4_400_000);
+        vaults.payout(merchant, 2_400_000);
+        assertEq(usdt.balanceOf(merchant), 49_999_999 - 499_999 - 2_400_000);
+        assertEq(_vault().reservedPayoutFee(), 2_400_000);
     }
 
     function test_only_the_relayer_may_charge_a_payout_fee() public {
@@ -78,12 +114,11 @@ contract TronVaultsTest is Test {
         vm.prank(relayer);
         vm.expectRevert(P2FluxTronVaults.PayoutFeeTooHigh.selector);
         vaults.payout(merchant, 8_000_001);
-        _pay(0);
         address m2 = address(0xB0B);
         usdt.mint(vaults.vaultOf(m2), 10e6);
         vm.prank(relayer);
         vm.expectRevert(P2FluxTronVaults.PayoutFeeTooHigh.selector);
-        vaults.payout(m2, 1_000_001); // more than 10% of 10 USDT
+        vaults.payout(m2, 1_000_001); // more than 10% of ~10 USDT
     }
 
     function test_charged_payouts_at_most_every_12_hours_free_ones_always() public {
@@ -104,34 +139,27 @@ contract TronVaultsTest is Test {
     function test_empty_vault_cannot_be_paid_out() public {
         vm.expectRevert(P2FluxTronVaults.ZeroAmount.selector);
         vaults.payout(merchant, 0);
-    }
-
-    function test_sweep_sends_shares_to_fixed_destinations() public {
-        _pay(100e6);
-        vm.prank(relayer);
-        vaults.payout(merchant, 3e6);
-        vm.prank(address(0xC0FFEE));
-        vaults.sweep();
-        assertEq(usdt.balanceOf(feeWallet), 999_999);
-        assertEq(usdt.balanceOf(gasTreasury), 3e6);
-        assertEq(vaults.accruedFees(), 0);
-        assertEq(vaults.accruedPayoutFees(), 0);
-    }
-
-    function test_frozen_factory_never_locks_a_merchant() public {
-        _pay(10e6);
-        vaults.payout(merchant, 0); // deploys
-        _pay(10e6);
-        usdt.freeze(address(vaults), true);
+        _pay(1);
+        vm.expectRevert(P2FluxTronVaults.ZeroAmount.selector);
         vaults.payout(merchant, 0);
-        assertEq(usdt.balanceOf(merchant), (9_999_999 - 99_999) + 10e6, "second batch paid in full, no fee");
-        assertEq(vaults.accruedFees(), 99_999, "only the first batch's fee accrued");
+    }
+
+    function test_frozen_factory_never_locks_a_merchant_and_keeps_its_reserve() public {
+        _pay(10e6);
+        vaults.payout(merchant, 0);
+        usdt.freeze(address(vaults), true);
+        vaults.collect(merchant); // cannot receive: the reserve simply stays in the vault
+        assertEq(_vault().reservedFee(), 99_999);
+        _pay(10e6);
+        vaults.payout(merchant, 0); // payouts unaffected
+        assertEq(usdt.balanceOf(merchant), (9_999_999 - 99_999) + (10e6 - 100_000));
     }
 
     function test_frozen_fee_wallet_keeps_its_share_accrued_other_share_still_leaves() public {
         _pay(100e6);
         vm.prank(relayer);
         vaults.payout(merchant, 3e6);
+        vaults.collect(merchant);
         usdt.freeze(feeWallet, true);
         vaults.sweep();
         assertEq(usdt.balanceOf(gasTreasury), 3e6);
@@ -149,36 +177,48 @@ contract TronVaultsTest is Test {
         assertEq(usdt.balanceOf(vaults.vaultOf(merchant)), 10e6);
     }
 
-    function test_only_the_factory_can_release_a_vault() public {
+    function test_only_the_factory_can_release_or_collect() public {
         _pay(10e6);
         vaults.payout(merchant, 0);
-        address vault = vaults.vaultOf(merchant);
-        usdt.mint(vault, 10e6);
+        P2FluxTronVault v = _vault();
         vm.expectRevert(P2FluxTronVault.NotFactory.selector);
-        P2FluxTronVault(vault).release(address(usdt), 10e6, 0);
+        v.release(address(usdt), 1, 0, 0);
+        vm.expectRevert(P2FluxTronVault.NotFactory.selector);
+        v.collect(address(usdt));
     }
 
-    /// Whatever the amounts and fees: the merchant gets everything but the fee and the allowed payout fee,
-    /// and P2Flux's accrual equals what the factory actually holds.
-    function testFuzz_conservation(uint96 a, uint96 b, uint32 pf) public {
-        uint256 held = uint256(a) + uint256(b);
-        vm.assume(held > 1);
-        uint256 total = held - 1; // VAULT_FLOOR stays
-        usdt.mint(vaults.vaultOf(merchant), a);
-        usdt.mint(vaults.vaultOf(merchant), b);
-        uint256 payoutFee = pf % (vaults.MAX_PAYOUT_FEE() + 1);
-        if (payoutFee * 10 > total) payoutFee = 0;
-        vm.prank(relayer);
-        vaults.payout(merchant, payoutFee);
-        uint256 fee = (total * vaults.FEE_BPS()) / 10_000;
-        assertEq(usdt.balanceOf(merchant), total - fee - payoutFee);
-        assertEq(usdt.balanceOf(address(vaults)), vaults.accruedFees() + vaults.accruedPayoutFees());
-        assertEq(usdt.balanceOf(vaults.vaultOf(merchant)), 1);
-    }
-
-    function test_a_vault_holding_only_its_floor_is_empty() public {
-        _pay(1);
-        vm.expectRevert(P2FluxTronVaults.ZeroAmount.selector);
+    function test_nobody_can_initialise_a_vault_or_the_implementation_again() public {
+        _pay(10e6);
         vaults.payout(merchant, 0);
+        P2FluxTronVault v = _vault();
+        P2FluxTronVault impl = P2FluxTronVault(vaults.implementation());
+        vm.expectRevert(P2FluxTronVault.AlreadyInitialized.selector);
+        v.initialize(address(0xBAD));
+        vm.expectRevert(P2FluxTronVault.AlreadyInitialized.selector);
+        impl.initialize(address(0xBAD));
+    }
+
+    /// Any sequence of payments, payouts and collections: the merchant gets everything but the fees and the
+    /// allowed payout fees; the vault holds exactly the floor plus what is reserved and not yet paid out.
+    function testFuzz_conservation(uint96 a, uint96 b, uint32 pf, bool collectBetween) public {
+        uint256 first = uint256(a) + 2;
+        _pay(first);
+        uint256 amount1 = first - 1;
+        uint256 fee1 = (amount1 * 100) / 10_000;
+        uint256 pfee = pf % (vaults.MAX_PAYOUT_FEE() + 1);
+        if (pfee * 10 > amount1 || amount1 - fee1 < pfee) pfee = 0;
+        vm.prank(relayer);
+        vaults.payout(merchant, pfee);
+        if (collectBetween) vaults.collect(merchant);
+        uint256 second = uint256(b) + 1;
+        _pay(second);
+        vaults.payout(merchant, 0);
+        uint256 fee2 = (second * 100) / 10_000;
+        assertEq(usdt.balanceOf(merchant), (amount1 - fee1 - pfee) + (second - fee2));
+        uint256 reserved = _vault().reservedFee() + _vault().reservedPayoutFee();
+        assertEq(usdt.balanceOf(address(_vault())), 1 + reserved);
+        vaults.collect(merchant);
+        vaults.sweep();
+        assertEq(usdt.balanceOf(feeWallet) + usdt.balanceOf(gasTreasury), fee1 + fee2 + pfee);
     }
 }
