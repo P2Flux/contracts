@@ -142,10 +142,11 @@ contract P2FluxTronVaults {
 
     /// @notice Subscription money a vault holds that is P2Flux's (fee, network fee + reimbursement), and how
     ///         much of the rest already paid its fee. Settled into the vault at its next payout.
+    ///         Packed in one slot: every storage write costs the buyer energy.
     struct Pending {
-        uint256 fee;
-        uint256 payoutFee;
-        uint256 feePaid;
+        uint80 fee;
+        uint80 payoutFee;
+        uint96 feePaid;
     }
 
     address public immutable token;
@@ -202,6 +203,7 @@ contract P2FluxTronVaults {
     error AlreadyChargedThisPeriod();
     error GasReimbursementTooHigh();
     error AmountTooSmall();
+    error AmountTooLarge();
     error TransferFailed();
 
     constructor(
@@ -258,7 +260,7 @@ contract P2FluxTronVaults {
         uint256 fee = ((amount - feePaid) * FEE_BPS) / 10_000;
         uint256 net = amount - fee - payoutFee;
         delete pending[merchant];
-        if (p.feePaid > feePaid) pending[merchant].feePaid = p.feePaid - feePaid;
+        if (p.feePaid > feePaid) pending[merchant].feePaid = uint96(p.feePaid - feePaid);
         vault.release(token, net, fee + p.fee, payoutFee + p.payoutFee);
         emit Payout(merchant, address(vault), amount, net, fee, payoutFee);
     }
@@ -354,13 +356,14 @@ contract P2FluxTronVaults {
 
         uint256 fee = (auth.amount * RECURRING_FEE_BPS) / 10_000;
         if (auth.amount <= fee + NETWORK_FEE) revert AmountTooSmall();
+        if (auth.amount > type(uint64).max) revert AmountTooLarge(); // keeps `Pending` far from overflow
         uint256 net = auth.amount - fee - NETWORK_FEE;
 
         lastChargedPeriodPlusOne[id] = periodIndex + 1;
         Pending storage p = pending[auth.recipient];
-        p.fee += fee;
-        p.payoutFee += NETWORK_FEE + reimbursement;
-        p.feePaid += net;
+        p.fee += uint80(fee);
+        p.payoutFee += uint80(NETWORK_FEE + reimbursement);
+        p.feePaid += uint96(net);
 
         // One transfer, payer -> the merchant's vault (deployed or not: its address is fixed). Judged by
         // what arrived (see ITRC20).
