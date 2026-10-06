@@ -52,7 +52,7 @@ contract P2FluxTronVault {
         if (msg.sender != factory) revert NotFactory();
         reservedFee += fee;
         reservedPayoutFee += payoutFee;
-        if (!_trySend(token, merchant, net)) revert TransferFailed();
+        if (net > 0 && _send(token, merchant, net) == 0) revert TransferFailed();
     }
 
     /// @notice Hand the reserved shares to the factory. A frozen factory leaves them reserved here - they
@@ -60,16 +60,24 @@ contract P2FluxTronVault {
     function collect(address token) external returns (uint256 fee, uint256 payoutFee) {
         if (msg.sender != factory) revert NotFactory();
         (fee, payoutFee) = (reservedFee, reservedPayoutFee);
-        if (fee + payoutFee == 0 || !_trySend(token, factory, fee + payoutFee)) return (0, 0);
+        if (fee + payoutFee == 0) return (0, 0);
+        uint256 arrived = _send(token, factory, fee + payoutFee);
+        if (arrived == 0) return (0, 0);
         (reservedFee, reservedPayoutFee) = (0, 0);
+        // Booked as it arrived (a token transfer fee comes out of P2Flux's share, never the merchant's).
+        payoutFee = payoutFee < arrived ? payoutFee : arrived;
+        fee = arrived - payoutFee;
     }
 
-    /// @dev Judged by what arrived, never by the return value (see ITRC20).
-    function _trySend(address token, address to, uint256 value) private returns (bool) {
-        if (value == 0) return true;
+    /// @dev What arrived at `to`, judged by its balance, never by the return value (see ITRC20); 0 when
+    ///      nothing did. Less than `value` is accepted: USDT has a transfer-fee switch (off since launch),
+    ///      and turned on it must not lock anyone's money in a vault.
+    function _send(address token, address to, uint256 value) private returns (uint256) {
         uint256 before = ITRC20(token).balanceOf(to);
         (bool ok, ) = token.call(abi.encodeWithSignature("transfer(address,uint256)", to, value));
-        return ok && ITRC20(token).balanceOf(to) == before + value;
+        if (!ok) return 0;
+        uint256 got = ITRC20(token).balanceOf(to) - before;
+        return got <= value ? got : 0;
     }
 }
 
@@ -88,7 +96,8 @@ contract P2FluxTronVault {
 ///          receive its money. The P2Flux fee (1%) is always kept back.
 ///        - Only the relayer may charge the network cost of a payout (`payoutFee`, merchant-funded): never
 ///          more than MAX_PAYOUT_FEE per payout, never more than half of the batch, and never more than
-///          MAX_PAYOUT_FEES_PER_DAY per vault in a rolling day. Merchants may choose to be paid out on
+///          MAX_PAYOUT_FEES_PER_DAY per vault in a 24-hour window (a fixed window from its first charge, so
+///          at most twice that across a window boundary). Merchants may choose to be paid out on
 ///          every payment (P2Flux's API offers it), so payouts may be frequent; a stolen relayer key can
 ///          still only take a bounded part of what arrives, and the admin replaces it.
 ///        - A payout is ONE transfer (to the merchant). P2Flux's share stays reserved in the vault and is
@@ -110,7 +119,7 @@ contract P2FluxTronVaults {
     /// @notice The most a single payout may be charged for its network cost: 8 USDT (6 decimals). A payout
     ///         costs ~$1-2.5 of TRX today; the cap leaves room for TRX price moves, never for profit.
     uint256 public constant MAX_PAYOUT_FEE = 8e6;
-    /// @notice The most the relayer may charge one vault for payouts in a rolling day: 30 USDT, room for
+    /// @notice The most the relayer may charge one vault for payouts per 24-hour window: 30 USDT, room for
     ///         roughly ten paid payouts a day.
     uint256 public constant MAX_PAYOUT_FEES_PER_DAY = 30e6;
     /// @notice What a payout leaves in the vault on top of the reserved shares: one unit. On Tron, a transfer
@@ -164,7 +173,7 @@ contract P2FluxTronVaults {
 
     uint256 public accruedFees;
     uint256 public accruedPayoutFees;
-    /// @notice Charged payout fees per vault in the current rolling day (window start, amount charged).
+    /// @notice Charged payout fees per vault in the current 24-hour window (window start, amount charged).
     struct FeeWindow {
         uint64 start;
         uint192 charged;
@@ -292,9 +301,9 @@ contract P2FluxTronVaults {
     function sweep() external {
         uint256 fees = accruedFees;
         uint256 payoutFees = accruedPayoutFees;
-        if (fees > 0 && _trySend(feeWallet, fees)) accruedFees = 0;
+        if (fees > 0 && _trySend(feeWallet, fees) > 0) accruedFees = 0;
         else fees = 0;
-        if (payoutFees > 0 && _trySend(gasTreasury, payoutFees)) accruedPayoutFees = 0;
+        if (payoutFees > 0 && _trySend(gasTreasury, payoutFees) > 0) accruedPayoutFees = 0;
         else payoutFees = 0;
         emit Swept(fees, payoutFees);
     }
@@ -435,9 +444,19 @@ contract P2FluxTronVaults {
         }
     }
 
-    function _trySend(address to, uint256 value) private returns (bool) {
+    /// @dev What arrived (see P2FluxTronVault._send): a token transfer fee must not freeze the sweep.
+    function _trySend(address to, uint256 value) private returns (uint256) {
         uint256 before = ITRC20(token).balanceOf(to);
         (bool ok, ) = token.call(abi.encodeWithSignature("transfer(address,uint256)", to, value));
-        return ok && ITRC20(token).balanceOf(to) == before + value;
+        if (!ok) return 0;
+        uint256 got = ITRC20(token).balanceOf(to) - before;
+        return got <= value ? got : 0;
+    }
+
+    /// @notice Create a merchant's vault ahead of its first payment, so its address is confirmed on chain
+    ///         before anyone pays it. Anyone may call; the vault is the same one `payout` would create.
+    function deploy(address merchant) external returns (address) {
+        if (merchant == address(0)) revert ZeroAddress();
+        return _deploy(merchant);
     }
 }

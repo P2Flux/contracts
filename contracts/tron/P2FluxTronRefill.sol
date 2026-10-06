@@ -23,7 +23,8 @@ interface ISunSwapRouter {
 ///          low on TRX, at most MAX_SWAP per swap and MAX_PER_DAY per day;
 ///        - `forward`: everything above KEEP sent to the cold treasury (anyone may call).
 ///      Only the relayer may refill, because it alone names `minOut` (from its own price view): a stolen
-///      relayer key could at worst sell MAX_PER_DAY a day at a bad price. The admin (cold key) can only
+///      relayer key could at worst sell maxPerDay per window (twice that across a window boundary) at a
+///      bad price. The admin (cold key) can only
 ///      rotate the relayer - the TRX must never keep flowing to a key that was replaced.
 ///      No owner withdrawal, not upgradeable.
 contract P2FluxTronRefill {
@@ -34,7 +35,8 @@ contract P2FluxTronRefill {
     address public immutable admin;
     /// @notice Most USDT (6 decimals) one swap sells.
     uint256 public immutable maxSwap;
-    /// @notice Most USDT sold per day (UTC-agnostic: a rolling day from the first swap of the window).
+    /// @notice Most USDT sold per 24-hour window (fixed from the window's first swap, so at most twice this
+    ///         across a window boundary).
     uint256 public immutable maxPerDay;
     /// @notice A refill only while the relayer holds less TRX (sun) than this.
     uint256 public immutable lowWaterSun;
@@ -124,7 +126,9 @@ contract P2FluxTronRefill {
         uint256 amount = held - keep;
         uint256 before = ITRC20Refill(token).balanceOf(coldTreasury);
         (bool ok, ) = token.call(abi.encodeWithSignature("transfer(address,uint256)", coldTreasury, amount));
-        if (!ok || ITRC20Refill(token).balanceOf(coldTreasury) != before + amount) revert TransferFailed();
+        // Arrival judged by balance; less than `amount` is accepted (a USDT transfer fee must not freeze this).
+        uint256 got = ITRC20Refill(token).balanceOf(coldTreasury) - before;
+        if (!ok || got == 0 || got > amount) revert TransferFailed();
         emit Forwarded(amount);
     }
 }

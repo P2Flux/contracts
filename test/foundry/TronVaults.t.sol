@@ -23,13 +23,27 @@ contract TronUsdtMock {
     }
     function mint(address to, uint256 v) external { balanceOf[to] += v; }
     function freeze(address a, bool f) external { frozen[a] = f; }
-    function transfer(address to, uint256 v) external returns (bool) {
+    function transfer(address to, uint256 v) external virtual returns (bool) {
         require(!frozen[msg.sender] && !frozen[to], "frozen");
         require(balanceOf[msg.sender] >= v, "balance");
         balanceOf[msg.sender] -= v;
         balanceOf[to] += v;
         transfers++;
         return false; // the quirk
+    }
+}
+
+/// Tron USDT with its transfer-fee switch turned on (1%, as `basisPointsRate` would): the receiver gets less.
+contract FeeUsdtMock is TronUsdtMock {
+    function transfer(address to, uint256 v) external override returns (bool) {
+        require(!frozen[msg.sender] && !frozen[to], "frozen");
+        require(balanceOf[msg.sender] >= v, "balance");
+        uint256 fee = v / 100;
+        balanceOf[msg.sender] -= v;
+        balanceOf[to] += v - fee;
+        balanceOf[address(0xFEEFEE)] += fee;
+        transfers++;
+        return false;
     }
 }
 
@@ -398,5 +412,32 @@ contract TronVaultsTest is Test {
         assertEq(usdt.balanceOf(merchant) + usdt.balanceOf(feeWallet) + usdt.balanceOf(gasTreasury) + usdt.balanceOf(v), inTotal);
         assertEq(usdt.balanceOf(gasTreasury), 100_000 + reimb);
         assertLe(usdt.balanceOf(v), 2, "only floor/fee-free dust remains");
+    }
+
+    function test_deploy_ahead_of_the_first_payment_at_the_predicted_address() public {
+        address predicted = vaults.vaultOf(merchant);
+        assertEq(predicted.code.length, 0);
+        assertEq(vaults.deploy(merchant), predicted);
+        assertEq(predicted.code.length, 45);
+        assertEq(vaults.deploy(merchant), predicted, "idempotent");
+        _pay(10e6);
+        vaults.payout(merchant, 0);
+        assertEq(usdt.balanceOf(merchant), 9_999_999 - 99_999);
+    }
+
+    function test_a_usdt_transfer_fee_never_locks_the_merchant_and_p2flux_books_what_arrived() public {
+        FeeUsdtMock t = new FeeUsdtMock();
+        P2FluxTronVaults v = new P2FluxTronVaults(admin, address(t), feeWallet, gasTreasury, relayer, bytes1(0xff));
+        t.mint(v.vaultOf(merchant), 100e6);
+        vm.prank(relayer);
+        v.payout(merchant, 2e6);
+        // 99.999999 payable: 1% fee 0.999999, cost 2, net 97 sent; the merchant receives 1% less of that
+        assertEq(t.balanceOf(merchant), 97e6 - 970_000);
+        v.collect(merchant);
+        assertEq(v.accruedPayoutFees(), 2e6, "the cost first");
+        assertEq(v.accruedFees(), 2_999_999 - 29_999 - 2e6, "the token fee comes out of P2Flux's share");
+        v.sweep();
+        assertGt(t.balanceOf(feeWallet), 0);
+        assertGt(t.balanceOf(gasTreasury), 0);
     }
 }
