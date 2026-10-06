@@ -86,9 +86,11 @@ contract P2FluxTronVault {
 ///      Payouts:
 ///        - Anyone may pay a vault out at any time with `payoutFee = 0`: the merchant never needs P2Flux to
 ///          receive its money. The P2Flux fee (1%) is always kept back.
-///        - Only the relayer may charge the network cost of a payout (`payoutFee`, merchant-funded), never
-///          more than MAX_PAYOUT_FEE, never more than a tenth of the batch, and at most once per
-///          PAID_PAYOUT_INTERVAL per vault - so even a stolen relayer key can take little, and slowly.
+///        - Only the relayer may charge the network cost of a payout (`payoutFee`, merchant-funded): never
+///          more than MAX_PAYOUT_FEE per payout, never more than half of the batch, and never more than
+///          MAX_PAYOUT_FEES_PER_DAY per vault in a rolling day. Merchants may choose to be paid out on
+///          every payment (P2Flux's API offers it), so payouts may be frequent; a stolen relayer key can
+///          still only take a bounded part of what arrives, and the admin replaces it.
 ///        - A payout is ONE transfer (to the merchant). P2Flux's share stays reserved in the vault and is
 ///          collected later (`collect`, anyone), then leaves to destinations fixed at deployment (`sweep`).
 ///
@@ -108,8 +110,9 @@ contract P2FluxTronVaults {
     /// @notice The most a single payout may be charged for its network cost: 8 USDT (6 decimals). A payout
     ///         costs ~$1-2.5 of TRX today; the cap leaves room for TRX price moves, never for profit.
     uint256 public constant MAX_PAYOUT_FEE = 8e6;
-    /// @notice A charged payout of the same vault at most this often.
-    uint256 public constant PAID_PAYOUT_INTERVAL = 12 hours;
+    /// @notice The most the relayer may charge one vault for payouts in a rolling day: 30 USDT, room for
+    ///         roughly ten paid payouts a day.
+    uint256 public constant MAX_PAYOUT_FEES_PER_DAY = 30e6;
     /// @notice What a payout leaves in the vault on top of the reserved shares: one unit. On Tron, a transfer
     ///         to an address holding no USDT costs about twice as much energy.
     uint256 public constant VAULT_FLOOR = 1;
@@ -161,7 +164,13 @@ contract P2FluxTronVaults {
 
     uint256 public accruedFees;
     uint256 public accruedPayoutFees;
-    mapping(address merchant => uint256) public lastPaidPayout;
+    /// @notice Charged payout fees per vault in the current rolling day (window start, amount charged).
+    struct FeeWindow {
+        uint64 start;
+        uint192 charged;
+    }
+
+    mapping(address merchant => FeeWindow) public payoutFees;
     mapping(address merchant => Pending) public pending;
     /// @dev subscriptionId => index of the last charged period, plus one (0 = never charged).
     mapping(bytes32 => uint256) public lastChargedPeriodPlusOne;
@@ -188,7 +197,7 @@ contract P2FluxTronVaults {
     error ZeroAmount();
     error NotRelayer();
     error PayoutFeeTooHigh();
-    error PaidPayoutTooSoon();
+    error PayoutFeesExhausted();
     error VaultMismatch();
     error NotAdmin();
     error TokenNotSupported();
@@ -251,9 +260,12 @@ contract P2FluxTronVaults {
         uint256 amount = held - reserved - VAULT_FLOOR;
         if (payoutFee > 0) {
             if (msg.sender != relayer) revert NotRelayer();
-            if (payoutFee > MAX_PAYOUT_FEE || payoutFee * 10 > amount) revert PayoutFeeTooHigh();
-            if (block.timestamp < lastPaidPayout[merchant] + PAID_PAYOUT_INTERVAL) revert PaidPayoutTooSoon();
-            lastPaidPayout[merchant] = block.timestamp;
+            if (payoutFee > MAX_PAYOUT_FEE || payoutFee * 2 > amount) revert PayoutFeeTooHigh();
+            FeeWindow memory w = payoutFees[merchant];
+            if (block.timestamp >= uint256(w.start) + 1 days) w = FeeWindow(uint64(block.timestamp), 0);
+            if (uint256(w.charged) + payoutFee > MAX_PAYOUT_FEES_PER_DAY) revert PayoutFeesExhausted();
+            w.charged += uint192(payoutFee);
+            payoutFees[merchant] = w;
         }
         // Subscription money already paid its fee at `charge`.
         uint256 feePaid = p.feePaid < amount ? p.feePaid : amount;

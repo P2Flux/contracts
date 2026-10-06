@@ -121,7 +121,7 @@ contract TronVaultsTest is Test {
         vaults.payout(merchant, 1);
     }
 
-    function test_payout_fee_capped_absolutely_and_at_a_tenth() public {
+    function test_payout_fee_capped_absolutely_and_at_half() public {
         _pay(200e6);
         vm.prank(relayer);
         vm.expectRevert(P2FluxTronVaults.PayoutFeeTooHigh.selector);
@@ -130,22 +130,30 @@ contract TronVaultsTest is Test {
         usdt.mint(vaults.vaultOf(m2), 10e6);
         vm.prank(relayer);
         vm.expectRevert(P2FluxTronVaults.PayoutFeeTooHigh.selector);
-        vaults.payout(m2, 1_000_001); // more than 10% of ~10 USDT
+        vaults.payout(m2, 5_000_000); // more than half of 9.999999
+        vm.prank(relayer);
+        vaults.payout(m2, 2_900_000); // an immediate payout of a 10 USDT payment
     }
 
-    function test_charged_payouts_at_most_every_12_hours_free_ones_always() public {
+    function test_charged_payouts_frequent_but_within_a_daily_budget() public {
+        for (uint256 i = 0; i < 3; i++) {
+            _pay(50e6);
+            vm.prank(relayer);
+            vaults.payout(merchant, 8e6); // 24 USDT charged in a day
+            vm.warp(block.timestamp + 1 hours);
+        }
         _pay(50e6);
         vm.prank(relayer);
-        vaults.payout(merchant, 1e6);
-        _pay(50e6);
+        vm.expectRevert(P2FluxTronVaults.PayoutFeesExhausted.selector);
+        vaults.payout(merchant, 6_000_001);
         vm.prank(relayer);
-        vm.expectRevert(P2FluxTronVaults.PaidPayoutTooSoon.selector);
-        vaults.payout(merchant, 1e6);
-        vaults.payout(merchant, 0); // free payout still works
+        vaults.payout(merchant, 6e6); // exactly the 30 USDT budget
         _pay(50e6);
-        vm.warp(block.timestamp + 12 hours);
+        vaults.payout(merchant, 0); // a free payout is never limited
+        _pay(50e6);
+        vm.warp(block.timestamp + 1 days);
         vm.prank(relayer);
-        vaults.payout(merchant, 1e6);
+        vaults.payout(merchant, 8e6); // a new day
     }
 
     function test_empty_vault_cannot_be_paid_out() public {
