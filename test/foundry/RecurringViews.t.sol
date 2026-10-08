@@ -117,8 +117,7 @@ contract RecurringViewsTest is P2FluxTest {
 
     /// isValidAuthorization agrees with charge for any single-byte change to the signature.
     function testFuzz_isValidAuthorization_agreesWithCharge(uint8 index, uint8 flip, bool tamper) public {
-        P2FluxRecurring.RecurringAuthorization memory a =
-            _auth(payer, uint48(30 days), uint48(block.timestamp), 0);
+        P2FluxRecurring.RecurringAuthorization memory a = _auth(payer, uint48(30 days), uint48(block.timestamp), 0);
         bytes memory sig = _signDigest(PAYER_KEY, recurring.subscriptionId(a));
         if (tamper && flip != 0) sig[index % sig.length] = bytes1(uint8(sig[index % sig.length]) ^ flip);
 
