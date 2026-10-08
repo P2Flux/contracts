@@ -94,6 +94,53 @@ The deployed contracts are immutable and source-verified, so findings are triage
 rather than with inline `slither-disable` comments: editing a verified source file, even a comment,
 changes its metadata hash and breaks the match with the deployment.
 
+## Review of the deployed contracts, 2026-10-08
+
+Re-run of every check against the seven contracts deployed on Base Mainnet (970 lines of code), with a
+second static analyser added. Free tools and our own review only: still not an audit. The threat model
+is in [`threat-model.md`](threat-model.md).
+
+**Static analysis.** Slither 0.11.6: 22 findings, all previously triaged, none new. The six in
+`P2FluxGasRefill` (not listed in the table above) are: `arbitrary-send-erc20` (it pulls only from the
+immutable gas treasury, only within the treasury's approval and daily cap, only while the relayer is
+below its floor, and pays ETH only to the immutable relayer - by design); `timestamp` ×2 (the UTC
+day of the daily cap and the oracle freshness check - accepted); `incorrect-equality` (a computed
+zero means "nothing to refill" - false positive); `unused-return` ×2 (Chainlink's deprecated round
+fields - accepted).
+
+Aderyn 0.6.8, first run: 6 "high" and 11 "low" detectors fired. None is a vulnerability:
+
+| Detector | Where | Verdict |
+|---|---|---|
+| H-1 `abi.encodePacked` hash collision | `vaultOf` in `P2FluxX402Splitter`, `P2FluxBatchVaults` | **False positive.** The standard CREATE2 init-code hash: fixed creation code followed by one 32-byte `abi.encode`d argument; no second dynamic value, so no collision. |
+| H-4 state change after external call | `P2FluxGasRefill` constructor | **False positive.** The constructor reads the price feed's `decimals()` before the contract exists; nothing can re-enter. |
+| H-5 contract name reused | local `IERC20` in `P2FluxSplitter` | **Informational.** A minimal local interface next to OpenZeppelin's; no effect on bytecode behaviour. |
+| H-2, H-3, H-6 | `contracts/test/` mocks | **Out of scope.** Test mocks, never deployed. |
+| L-10 unsafe ERC20 operation | `P2FluxSplitter._transferFrom`, x402 vault `_tryTransfer` | **False positive.** Both check the call result and the decoded return value by hand; the vault's is deliberately non-reverting so a frozen fee wallet cannot lock a seller's funds (finding C2). |
+| other L-* | various | Style and gas notes (literals, events on internal state, public functions), or test mocks. |
+
+**Tests.** All Foundry suites pass, including a 20,000-run deep soak, and the fork suites pass against
+the real USDC, Permit2 and x402 proxy on Base Mainnet and Base Sepolia (read-only forks). Foundry line
+coverage: `P2FluxBatchVaults`, `P2FluxGasRefill`, `P2FluxSplitter`, `P2FluxX402Splitter` 100%;
+`P2FluxGasSponsor` 96%, `P2FluxSponsoredSplitter` 91%; `P2FluxRecurring` 73% before this review - its
+smart-wallet signature paths and read-only helpers were tested only in the TypeScript suite.
+
+Added `test/foundry/RecurringViews.t.sol`:
+- `isChargeable` predicts exactly whether a charge succeeds, for fuzzed periods, start and end times,
+  revocations and earlier charges, and after a charge the recorded period is `currentPeriod`;
+- `isValidAuthorization` agrees with `charge` for any single-byte change to a signature;
+- an ERC-1271 contract wallet is charged while it vouches for the signature and never after its owner
+  rotates;
+- an EIP-7702 delegated EOA is charged with its own key's signature, never with a stranger's;
+- the constructor refuses every zero address.
+
+With these, `P2FluxRecurring` Foundry line coverage is 100% (73/73; statements 95%, branches 79%).
+Mutation check: changing one comparison in `isChargeable` was caught within seven fuzz runs. The
+TypeScript deployment-facing suite (159 tests) passes unchanged.
+
+The P2Flux API calls `isChargeable` and `isValidAuthorization` to decide what it tells merchants, so
+these tests protect against the API and the chain disagreeing about whether a subscription is due.
+
 ## Accepted dependency risk
 
 `npm audit` reports `tmp` (via `solc@0.8.26`, dev-only). The only available fix replaces the
