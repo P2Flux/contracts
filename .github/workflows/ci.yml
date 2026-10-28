@@ -73,6 +73,24 @@ jobs:
       # Reviewed findings live in slither.db.json, by id. Anything NOT in there fails this job.
       - run: slither .
 
+  aderyn:
+    name: static analysis (aderyn)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+      - run: npm ci
+      - run: forge install foundry-rs/forge-std@v1.9.7 --no-git
+      # Reviewed findings live in aderyn.reviewed.json (count per detector and file). Anything more fails this job.
+      - run: npx -y @cyfrin/aderyn@0.6.8 . -o aderyn-report.json
+      - run: npx tsx scripts/aderyn-check.ts aderyn-report.json
+
   audit:
     name: dependency audit (runtime)
     runs-on: ubuntu-latest

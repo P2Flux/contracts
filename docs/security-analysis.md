@@ -10,6 +10,7 @@ Free, open-source tooling only. Nothing here is an audit, and nothing here claim
 | Fuzz + stateful invariant suites | `forge test` | CI, every push |
 | Longer soak before a release | `FOUNDRY_PROFILE=deep forge test` | locally |
 | Static analysis | `slither .` (0.11.6) | CI, every push |
+| Static analysis | `aderyn .` (0.6.8) + `scripts/aderyn-check.ts` | CI, every push |
 | Runtime dependency audit | `npm audit --omit=dev --audit-level=high` | CI, every push |
 
 Foundry setup, once: `forge install foundry-rs/forge-std@v1.9.7 --no-git`. `lib/` is deliberately
@@ -140,6 +141,14 @@ TypeScript deployment-facing suite (159 tests) passes unchanged.
 
 The P2Flux API calls `isChargeable` and `isValidAuthorization` to decide what it tells merchants, so
 these tests protect against the API and the chain disagreeing about whether a subscription is due.
+
+## Aderyn in CI, 2026-10-28
+
+Aderyn 0.6.8 now runs on every push. Re-run against main: the same 6 high and 11 low detectors as
+the 2026-10-08 review above, no new one. Every finding in a deployed contract (42 instances, mostly
+literal and shadowing style notes) is listed with its count in `aderyn.reviewed.json`, the way
+`slither.db.json` lists Slither's; a new detector or one more instance in any file fails the build.
+Test mocks under `contracts/test/` are not counted - they are never deployed.
 
 ## Accepted dependency risk
 

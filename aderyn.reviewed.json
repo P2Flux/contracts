@@ -1,0 +1,21 @@
+{
+  "abi-encode-packed-hash-collision contracts/P2FluxBatchVaults.sol": 1,
+  "abi-encode-packed-hash-collision contracts/P2FluxX402Splitter.sol": 1,
+  "large-numeric-literal contracts/P2FluxBatchVaults.sol": 1,
+  "large-numeric-literal contracts/P2FluxGasRefill.sol": 3,
+  "large-numeric-literal contracts/P2FluxRecurring.sol": 1,
+  "large-numeric-literal contracts/P2FluxSplitter.sol": 1,
+  "large-numeric-literal contracts/P2FluxSponsoredSplitter.sol": 2,
+  "large-numeric-literal contracts/P2FluxX402Splitter.sol": 2,
+  "literal-instead-of-constant contracts/P2FluxGasRefill.sol": 5,
+  "literal-instead-of-constant contracts/P2FluxRecurring.sol": 2,
+  "literal-instead-of-constant contracts/P2FluxSponsoredSplitter.sol": 2,
+  "literal-instead-of-constant contracts/P2FluxX402Splitter.sol": 2,
+  "local-variable-shadowing contracts/P2FluxGasRefill.sol": 13,
+  "reentrancy-state-change contracts/P2FluxGasRefill.sol": 1,
+  "reused-contract-name contracts/P2FluxSplitter.sol": 1,
+  "unsafe-erc20-operation contracts/P2FluxSplitter.sol": 1,
+  "unsafe-erc20-operation contracts/P2FluxX402Splitter.sol": 1,
+  "unused-public-function contracts/P2FluxRecurring.sol": 1,
+  "unused-public-function contracts/P2FluxSponsoredSplitter.sol": 1
+}
