@@ -116,12 +116,14 @@ contract P2FluxTronVault {
 contract P2FluxTronVaults {
     /// @notice P2Flux's fee on every payout: 1%, the same as a one-time payment on Base.
     uint16 public constant FEE_BPS = 100;
-    /// @notice The most a single payout may be charged for its network cost: 8 USDT (6 decimals). A payout
-    ///         costs ~$1-2.5 of TRX today; the cap leaves room for TRX price moves, never for profit.
-    uint256 public constant MAX_PAYOUT_FEE = 8e6;
-    /// @notice The most the relayer may charge one vault for payouts per 24-hour window: 30 USDT, room for
-    ///         roughly ten paid payouts a day.
-    uint256 public constant MAX_PAYOUT_FEES_PER_DAY = 30e6;
+    /// @notice The most a single payout may be charged: 25 USDT (6 decimals), and never more than half of it.
+    ///         It covers the payout's network cost (~$2-4 of TRX) and the network fees buyers without TRX
+    ///         paid into the vault for P2Flux's energy - collected at the merchant's own payout, so a payout
+    ///         threshold (e.g. 50 USDT) can carry them all. Whatever is charged goes only to P2Flux's fixed
+    ///         gasTreasury: no key can send a merchant's money anywhere but the merchant.
+    uint256 public constant MAX_PAYOUT_FEE = 25e6;
+    /// @notice The most the relayer may charge one vault for payouts per 24-hour window: 100 USDT.
+    uint256 public constant MAX_PAYOUT_FEES_PER_DAY = 100e6;
     /// @notice What a payout leaves in the vault on top of the reserved shares: one unit. On Tron, a transfer
     ///         to an address holding no USDT costs about twice as much energy.
     uint256 public constant VAULT_FLOOR = 1;

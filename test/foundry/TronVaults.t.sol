@@ -139,7 +139,7 @@ contract TronVaultsTest is Test {
         _pay(200e6);
         vm.prank(relayer);
         vm.expectRevert(P2FluxTronVaults.PayoutFeeTooHigh.selector);
-        vaults.payout(merchant, 8_000_001);
+        vaults.payout(merchant, 25_000_001);
         address m2 = address(0xB0B);
         usdt.mint(vaults.vaultOf(m2), 10e6);
         vm.prank(relayer);
@@ -151,23 +151,26 @@ contract TronVaultsTest is Test {
 
     function test_charged_payouts_frequent_but_within_a_daily_budget() public {
         for (uint256 i = 0; i < 3; i++) {
-            _pay(50e6);
+            _pay(60e6);
             vm.prank(relayer);
-            vaults.payout(merchant, 8e6); // 24 USDT charged in a day
+            vaults.payout(merchant, 25e6); // 75 USDT charged in a day
             vm.warp(block.timestamp + 1 hours);
         }
-        _pay(50e6);
+        _pay(60e6);
+        vm.prank(relayer);
+        vaults.payout(merchant, 20e6); // 95
+        _pay(60e6);
         vm.prank(relayer);
         vm.expectRevert(P2FluxTronVaults.PayoutFeesExhausted.selector);
-        vaults.payout(merchant, 6_000_001);
+        vaults.payout(merchant, 5_000_001);
         vm.prank(relayer);
-        vaults.payout(merchant, 6e6); // exactly the 30 USDT budget
+        vaults.payout(merchant, 5e6); // exactly the 100 USDT budget
         _pay(50e6);
         vaults.payout(merchant, 0); // a free payout is never limited
         _pay(50e6);
         vm.warp(block.timestamp + 1 days);
         vm.prank(relayer);
-        vaults.payout(merchant, 8e6); // a new day
+        vaults.payout(merchant, 25e6); // a new day
     }
 
     function test_empty_vault_cannot_be_paid_out() public {
