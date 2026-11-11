@@ -126,8 +126,10 @@ coverage: `P2FluxBatchVaults`, `P2FluxGasRefill`, `P2FluxSplitter`, `P2FluxX402S
 smart-wallet signature paths and read-only helpers were tested only in the TypeScript suite.
 
 Added `test/foundry/RecurringViews.t.sol`:
-- `isChargeable` predicts exactly whether a charge succeeds, for fuzzed periods, start and end times,
-  revocations and earlier charges, and after a charge the recorded period is `currentPeriod`;
+- `isChargeable` predicts whether a charge succeeds, for fuzzed periods, start and end times,
+  revocations and earlier charges, and after a charge the recorded period is `currentPeriod`. It does
+  NOT check terms `charge` refuses on their own (an amount too small for the fees, another token, a zero
+  recipient): the P2Flux API refuses those when a subscription is created (pre-audit R1, 11 Nov 2026);
 - `isValidAuthorization` agrees with `charge` for any single-byte change to a signature;
 - an ERC-1271 contract wallet is charged while it vouches for the signature and never after its owner
   rotates;

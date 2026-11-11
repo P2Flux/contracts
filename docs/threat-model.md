@@ -1,4 +1,4 @@
-# Threat model — P2Flux contracts on Base
+# Threat model — P2Flux contracts (Base; Tron before its release)
 
 What each contract can and cannot do, who holds which key, and what an attacker could achieve with
 each key or system they might compromise. Written 2026-10-08 against the contracts deployed on Base
@@ -100,6 +100,42 @@ subscription (`revoke`), or removing the approval at any time from their wallet.
 | Uniswap v3 | Gas refill swaps only; output must be within the slippage limit of the oracle price |
 | x402 batch-settlement escrow (`0x4020…0003`, x402 project) | Holds agent deposits for prepaid AI-agent payments; P2Flux's vaults only receive from it |
 | Permit2 / x402 `upto` proxy | Used for x402 `upto` payments; the proxy's code hash is pinned in the fork tests |
+
+## Tron contracts (P2FluxTronVaults, P2FluxTronRefill) - not yet on Tron Mainnet
+
+The same design properties as on Base: each merchant has a vault (a minimal proxy, address derived from the
+merchant's own address, created and bound to the merchant in one transaction) that can pay out only to that
+merchant. P2Flux's shares (1% and the payout fee) go only to the two P2Flux addresses fixed at deployment.
+
+Payout fee limits (raised 10 Nov 2026 so a merchant's own payout threshold can carry what buyers without TRX
+owe P2Flux for the energy it provided): at most **25 USDT per payout**, never more than **half of the payout**,
+and at most **100 USDT per merchant per 24-hour window**.
+
+- **Stolen relayer key:** can charge those limits on each payout of each merchant - 50% of a 50 USDT payout,
+  and up to ~200 USDT per merchant in about a second across a window boundary (the window is fixed, not
+  rolling). The money goes to P2Flux's fixed gas treasury, never to the attacker, so it is a loss for merchants
+  that P2Flux would owe back, not a theft path. The relayer key is protected accordingly; a compromised key is
+  replaced with `setRelayer` (admin). Pre-audit PT-02, 11 Nov 2026.
+- **Merchant paying himself out (`payout(merchant, 0)`, open to anyone):** the promise that a merchant can
+  always reach his money without P2Flux. It skips the payout fee, so network fees that buyers without TRX paid
+  into the vault for P2Flux's energy leave with the merchant. Accepted (owner, 10 Nov 2026) and bounded in the
+  API: no further sponsoring for a vault that owes more than 20 USDT, or whose owed fees are no longer in the
+  vault, until new money there covers them and the next relayer payout collects them. Pre-audit PT-01.
+- **USDT issuer:** Tether can freeze (blacklist) any address, including a vault, and destroy its balance. That
+  is outside any contract's control; the vault design keeps no more in a vault than the merchant's own unpaid
+  payments.
+- **Energy:** the contracts are deployed with `userFeePercentage = 100`, so callers pay their own energy; nobody
+  can spend P2Flux's staked energy by calling them.
+
+## Accepted on Base
+
+- **A payer's permit used directly (pre-audit PS-01):** whoever holds a payer's permit signature can submit it
+  to USDC before the relayer; the relayer's transaction then reverts and the payer gets the allowance without
+  the sponsored-permit fee (at most 0.25 USDC). It needs a leaked signature (Base has no public mempool);
+  accepted.
+- **One payment id in two contracts (pre-audit X1):** `P2FluxSplitter` and `P2FluxSponsoredSplitter` compute the
+  same payment id but keep separate settlement maps. The API binds each payment to one contract and refuses to
+  sponsor a payment already settled through the plain Splitter.
 
 ## Not covered by these contracts
 
