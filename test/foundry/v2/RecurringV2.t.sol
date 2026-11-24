@@ -48,7 +48,7 @@ contract RecurringV2Test is V2Test {
         reimbursement = bound(reimbursement, 0, GAS_CAP);
         address recipient = asPartner ? partner : merchant;
         uint256 fee = (amount * (asPartner ? RECURRING_PARTNER_BPS : RECURRING_BPS)) / 10_000;
-        vm.assume(amount > fee + FIXED_FEE);
+        vm.assume(amount > fee + FIXED_FEE); // relayer charge: fixed fee applies
         uint256 before = token.balanceOf(payer);
         _charge(_auth(recipient, amount, GAS_CAP), reimbursement);
         assertEq(before - token.balanceOf(payer), amount + reimbursement);
@@ -134,6 +134,7 @@ contract RecurringV2Test is V2Test {
         Recurring.RecurringAuthorization memory a = _auth(merchant, 10e6, 0);
         a.payer = address(w);
         bytes memory sig = _sig(a);
+        vm.prank(relayer);
         recurring.charge(a, sig, 0);
         assertEq(token.balanceOf(merchant), 10e6 - 0.15e6 - 0.05e6);
     }
@@ -183,6 +184,7 @@ contract RecurringV2Test is V2Test {
 
         a = _auth(merchant, FIXED_FEE, 0);
         sig = _sig(a);
+        vm.prank(relayer); // relayer charge: the fixed fee applies
         vm.expectRevert(Recurring.AmountTooSmall.selector);
         recurring.charge(a, sig, 0);
 
@@ -221,5 +223,54 @@ contract RecurringV2Test is V2Test {
         new Recurring(admin, relayer, feeWallet, address(0), address(token), address(registry), GAS_CAP);
         vm.expectRevert(Recurring.CapTooHigh.selector);
         new Recurring(admin, relayer, feeWallet, gasTreasury, address(token), address(registry), 1e6 + 1);
+    }
+
+    /// R-04: when anyone but the relayer runs the charge (they pay the gas), no fixed fee.
+    function testFuzz_noFixedFeeWhenNotRelayer(address caller, uint256 amount) public {
+        vm.assume(caller != relayer);
+        amount = bound(amount, 1, 1e15);
+        uint256 fee = (amount * RECURRING_BPS) / 10_000;
+        vm.assume(amount > fee);
+        Recurring.RecurringAuthorization memory a = _auth(merchant, amount, GAS_CAP);
+        bytes memory sig = _sig(a);
+        vm.prank(caller);
+        recurring.charge(a, sig, GAS_CAP);
+        assertEq(token.balanceOf(merchant), amount - fee);
+        assertEq(token.balanceOf(gasTreasury), 0, "no fixed fee, no reimbursement");
+        assertEq(token.balanceOf(feeWallet), fee);
+    }
+
+    /// R-03 regression: isChargeable follows the CURRENT rates, so a fee increase that makes a
+    /// small subscription uncoverable shows up as not chargeable instead of a revert.
+    function test_isChargeableFollowsCurrentRates() public {
+        Recurring.RecurringAuthorization memory a = _auth(merchant, 0.15e6, 0);
+        assertTrue(recurring.isChargeable(a));
+        _charge(a, 0);
+        _setRate(P2FluxFeeRegistry.Kind.Recurring, 150, 125, 200_000);
+        vm.warp(a.start + 30 days);
+        assertFalse(recurring.isChargeable(a), "0.15 no longer covers 1.5% + 0.20");
+        bytes memory sig = _sig(a);
+        vm.prank(relayer);
+        vm.expectRevert(Recurring.AmountTooSmall.selector);
+        recurring.charge(a, sig, 0);
+    }
+
+    /// The documented API minimum (0.204082 USDC) survives every legal rate on the relayer path.
+    function testFuzz_recommendedMinimumSurvivesCaps(uint16 bps, uint16 pbps, uint64 fixedFee) public {
+        bps = uint16(bound(bps, 0, 200));
+        pbps = uint16(bound(pbps, 0, bps));
+        fixedFee = uint64(bound(fixedFee, 0, 200_000));
+        _setRate(P2FluxFeeRegistry.Kind.Recurring, bps, pbps, fixedFee);
+        assertTrue(recurring.isChargeable(_auth(merchant, 204_082, 0)));
+        _charge(_auth(merchant, 204_082, 0), 0);
+    }
+
+    /// R-01 regression.
+    function test_selfRecipientRefused() public {
+        Recurring.RecurringAuthorization memory a = _auth(address(recurring), 10e6, 0);
+        bytes memory sig = _sig(a);
+        assertFalse(recurring.isChargeable(a));
+        vm.expectRevert(P2FluxV2Base.InvalidRecipient.selector);
+        recurring.charge(a, sig, 0);
     }
 }

@@ -7,184 +7,188 @@ import {P2FluxSplitterV2} from "../../../../contracts/v2/P2FluxSplitterV2.sol";
 import {P2FluxSponsoredSplitterV2 as Sponsored} from "../../../../contracts/v2/P2FluxSponsoredSplitterV2.sol";
 import {P2FluxRecurringV2 as Recurring} from "../../../../contracts/v2/P2FluxRecurringV2.sol";
 import {P2FluxSend} from "../../../../contracts/v2/P2FluxSend.sol";
+import {P2FluxV2Base} from "../../../../contracts/v2/P2FluxV2Base.sol";
 
-/// @notice A registry-shaped contract that returns whatever it is told. Stands for a wrong address in
-///         a deployment manifest (or a future registry with a bug): nothing in the payment contracts
-///         re-checks what it returns.
+/// @notice A registry-shaped contract that returns whatever it is told, including the sanity values
+///         the payment contracts check at construction. Stands for a wrong address in a deployment
+///         manifest or a future registry with a bug.
 contract RogueRegistry {
-    uint256 public bps;
-    uint256 public fixedFee;
+    uint16 public constant MAX_BPS = 200;
+    uint64 public constant MAX_FIXED_FEE = 0.2e6;
+    uint256 public constant DELAY = 48 hours;
+    uint16 public bps;
+    uint16 public partnerBps;
+    uint64 public fixedFee;
 
-    function set(uint256 _bps, uint256 _fixed) external {
+    function set(uint16 _bps, uint16 _pbps, uint64 _fixed) external {
         bps = _bps;
+        partnerBps = _pbps;
         fixedFee = _fixed;
     }
 
-    function feeFor(P2FluxFeeRegistry.Kind, address) external view returns (uint256, uint256) {
-        return (bps, fixedFee);
+    function rates(P2FluxFeeRegistry.Kind) external view returns (uint16, uint16, uint64) {
+        return (bps, partnerBps, fixedFee);
+    }
+
+    function isPartner(address) external pure returns (bool) {
+        return true;
     }
 }
 
-/// @notice PoCs for the findings in docs/v2-review-2026-11-24.md. Each test PASSES by demonstrating
-///         the behaviour the finding describes; once a fix lands the matching test must be inverted.
+/// @notice A contract with code that is not a registry at all.
+contract NotARegistry {
+    uint256 public x;
+}
+
+/// @notice Regression tests for docs/v2-review-2026-11-24.md. The review's PoCs demonstrated the
+///         findings; after the fixes each one is inverted here and must pass. R-06, R-07 and R-08 are
+///         accepted / handled off chain and stay as documentation of the bound.
 contract ReviewFindingsTest is ReviewBase {
     function setUp() public {
         _reviewSetUp();
     }
 
-    // ---------------------------------------------------------------------------------------------
-    // R-01 (Low): a payment or send whose recipient is the contract itself locks the funds forever.
-    // ---------------------------------------------------------------------------------------------
+    // --- R-01: a payment or send to the contract itself is refused ---------------------------------
 
-    function test_R01_sendToSendContractLocksFunds() public {
+    function test_R01_sendToSendContractRefused() public {
         token.mint(payer, 101e6);
         vm.startPrank(payer);
         token.approve(address(sender), type(uint256).max);
+        vm.expectRevert(P2FluxV2Base.InvalidRecipient.selector);
         sender.send(address(sender), 100e6, 0.1e6, bytes32("oops"));
         vm.stopPrank();
-        // 100 USDC now sits in a contract with no withdrawal function. Nobody can move it.
-        assertEq(token.balanceOf(address(sender)), 100e6, "locked in P2FluxSend");
+        assertEq(token.balanceOf(address(sender)), 0);
     }
 
-    function test_R01_payToSplitterLocksFunds() public {
+    function test_R01_payToSplitterRefused() public {
         token.mint(payer, 100e6);
         vm.startPrank(payer);
         token.approve(address(splitter), type(uint256).max);
+        vm.expectRevert(P2FluxV2Base.InvalidRecipient.selector);
         splitter.pay(address(token), address(splitter), 100e6, bytes32("oops"));
         vm.stopPrank();
-        assertEq(token.balanceOf(address(splitter)), 99e6, "net locked in P2FluxSplitterV2");
     }
 
-    function test_R01_recurringToItselfLocksFundsEveryPeriod() public {
+    function test_R01_recurringToItselfRefused() public {
         token.mint(payer, 100e6);
         vm.prank(payer);
         token.approve(address(recurring), type(uint256).max);
         Recurring.RecurringAuthorization memory a = _auth(address(recurring), 10e6, 0);
-        recurring.charge(a, _sigRec(a), 0);
-        vm.warp(block.timestamp + 30 days);
-        recurring.charge(a, _sigRec(a), 0);
-        assertEq(token.balanceOf(address(recurring)), 2 * (10e6 - 0.15e6 - 0.05e6), "locked, grows per period");
+        bytes memory sig = _sigRec(a);
+        vm.expectRevert(P2FluxV2Base.InvalidRecipient.selector);
+        recurring.charge(a, sig, 0);
+        assertFalse(recurring.isChargeable(a));
     }
 
-    /// Control: the relayed paths are already protected by the residual-balance guard.
-    function test_R01_control_relayedPathsRefuseSelf() public {
-        P2FluxSend.RelayedSend memory s = _rs(address(sender), 10e6, bytes32("x"), 0);
-        uint256 total = _relayedTotal(s);
-        token.mint(payer, total);
-        (uint8 v, bytes32 r, bytes32 sig) = _signRs(s, total);
+    function test_R01_relayedPathsRefuseSelf() public {
+        P2FluxSend.RelayedSend memory s = _rs(address(sender), 10e6, bytes32("x"));
         vm.prank(relayer);
-        vm.expectRevert(P2FluxSend.ResidualBalance.selector);
-        sender.sendWithAuthorization(s, v, r, sig);
+        vm.expectRevert(P2FluxV2Base.InvalidRecipient.selector);
+        sender.sendWithAuthorization(s, 0, 0, 0);
+        vm.prank(relayer);
+        vm.expectRevert(P2FluxV2Base.InvalidRecipient.selector);
+        sponsored.payWithAuthorization(_sp(address(sponsored), 10e6, bytes32("x"), 0), 0, 0, 0);
     }
 
-    // ---------------------------------------------------------------------------------------------
-    // R-02 (Low): payment contracts trust the registry's numbers without re-checking the caps.
-    // ---------------------------------------------------------------------------------------------
+    // --- R-02: caps re-checked in the payment contracts; registry validated at construction ---------
 
-    function test_R02_rogueRegistryTakesWholePayment() public {
+    function test_R02_rogueRegistryCannotExceedCaps() public {
         RogueRegistry rogue = new RogueRegistry();
         P2FluxSplitterV2 s2 = new P2FluxSplitterV2(address(token), feeWallet, address(rogue));
         Sponsored sp2 = new Sponsored(address(token), feeWallet, gasTreasury, relayer, address(rogue), NETWORK_CAP);
-
-        // 100% "fee": merchant receives zero, the fee wallet the whole 100 USDC.
-        rogue.set(10_000, 0);
         token.mint(payer, 100e6);
-        vm.startPrank(payer);
+        vm.prank(payer);
         token.approve(address(s2), type(uint256).max);
+
+        rogue.set(10_000, 0, 0); // 100% fee
+        vm.prank(payer);
+        vm.expectRevert(P2FluxV2Base.RateAboveCap.selector);
         s2.pay(address(token), merchant, 100e6, bytes32("a"));
-        vm.stopPrank();
-        assertEq(token.balanceOf(merchant), 0, "merchant got nothing");
-        assertEq(token.balanceOf(feeWallet), 100e6);
+        vm.expectRevert(P2FluxV2Base.RateAboveCap.selector);
+        sp2.minimumAmount(merchant); // no division by zero: refused before it
 
-        // Fixed fee far above MAX_FIXED_FEE: merchant left with 1 base unit of a 100 USDC sale.
-        rogue.set(0, 100e6 - 1);
-        Sponsored.SponsoredPayment memory p =
-            Sponsored.SponsoredPayment(payer, merchant, 100e6, bytes32("b"), 0, block.timestamp + 600);
-        (uint8 v, bytes32 r, bytes32 s) =
-            _signReceive(PAYER_KEY, payer, address(sp2), p.amount, p.validBefore, sp2.authorizationNonce(p));
-        token.mint(payer, 100e6);
+        rogue.set(0, 0, 100e6 - 1); // fixed fee far above 0.20
         vm.prank(relayer);
-        sp2.payWithAuthorization(p, v, r, s);
-        assertEq(token.balanceOf(merchant), 1, "merchant got 1 base unit");
-        assertEq(token.balanceOf(gasTreasury), 100e6 - 1);
+        vm.expectRevert(P2FluxV2Base.RateAboveCap.selector);
+        sp2.payWithAuthorization(_sp(merchant, 100e6, bytes32("b"), 0), 0, 0, 0);
 
-        // And minimumAmount() divides by zero at bps = 10_000.
-        rogue.set(10_000, 0);
-        vm.expectRevert();
-        sp2.minimumAmount(merchant);
+        rogue.set(100, 150, 0); // partner above standard
+        vm.prank(payer);
+        vm.expectRevert(P2FluxV2Base.RateAboveCap.selector);
+        s2.pay(address(token), merchant, 100e6, bytes32("c"));
+
+        rogue.set(200, 200, 0.2e6); // at the caps: works, merchant keeps amount - 2%
+        vm.prank(payer);
+        s2.pay(address(token), merchant, 100e6, bytes32("d"));
+        assertEq(token.balanceOf(merchant), 98e6);
     }
 
-    // ---------------------------------------------------------------------------------------------
-    // R-03 (Low): a fee increase inside the caps permanently bricks small existing subscriptions, and
-    // isChargeable() keeps reporting them as chargeable.
-    // ---------------------------------------------------------------------------------------------
+    function test_R02_registryValidatedAtConstruction() public {
+        address notReg = address(new NotARegistry());
+        vm.expectRevert();
+        new P2FluxSplitterV2(address(token), feeWallet, notReg);
+        vm.expectRevert(P2FluxV2Base.NotAContract.selector);
+        new P2FluxSplitterV2(address(token), feeWallet, makeAddr("eoa"));
+    }
 
-    function test_R03_feeIncreaseBricksSmallSubscription() public {
+    // --- R-03: isChargeable follows the current rates ---------------------------------------------
+
+    function test_R03_isChargeableFalseAfterFeeIncrease() public {
         token.mint(payer, 100e6);
         vm.prank(payer);
         token.approve(address(recurring), type(uint256).max);
-        // 0.15 USDC per month: fine at today's 1.5% + 0.05.
         Recurring.RecurringAuthorization memory a = _auth(merchant, 0.15e6, 0);
         bytes memory sig = _sigRec(a);
         vm.prank(relayer);
         recurring.charge(a, sig, 0);
-
-        // Admin raises the recurring fixed fee to the cap (0.20), legitimately, after 48 h.
         _setRate(P2FluxFeeRegistry.Kind.Recurring, 150, 125, 0.2e6);
         vm.warp(a.start + 30 days);
-
-        assertTrue(recurring.isChargeable(a), "view says chargeable");
+        assertFalse(recurring.isChargeable(a), "view now agrees with charge");
         vm.prank(relayer);
         vm.expectRevert(Recurring.AmountTooSmall.selector);
         recurring.charge(a, sig, 0);
-        // No path exists to charge it again at the new rate: the payer must re-sign a new amount.
     }
 
-    // ---------------------------------------------------------------------------------------------
-    // R-04 (Informational / owner rule): the recurring fixed fee is taken even when the relayer did
-    // not pay the gas (payer, merchant or anyone else executes the charge).
-    // ---------------------------------------------------------------------------------------------
+    // --- R-04: no fixed fee when the payer (or anyone but the relayer) pays the gas ----------------
 
-    function test_R04_fixedFeeChargedWhenPayerPaysOwnGas() public {
+    function test_R04_noFixedFeeWhenPayerPaysOwnGas() public {
         token.mint(payer, 100e6);
         vm.prank(payer);
         token.approve(address(recurring), type(uint256).max);
         Recurring.RecurringAuthorization memory a = _auth(merchant, 10e6, 0.05e6);
         bytes memory sig = _sigRec(a);
-        vm.prank(payer); // the buyer pays their own gas
+        vm.prank(payer);
         recurring.charge(a, sig, 0.05e6);
-        assertEq(token.balanceOf(gasTreasury), 0.05e6, "fixed fee still taken (reimbursement correctly 0)");
-        assertEq(token.balanceOf(merchant), 10e6 - 0.15e6 - 0.05e6);
+        assertEq(token.balanceOf(gasTreasury), 0, "no fixed fee, no reimbursement");
+        assertEq(token.balanceOf(merchant), 10e6 - 0.15e6);
     }
 
-    // ---------------------------------------------------------------------------------------------
-    // R-05 (Informational): anyone picks the moment a due rate change applies, anywhere in a 7-day
-    // window; every relayed send signed at the old rate dies at that moment.
-    // ---------------------------------------------------------------------------------------------
+    // --- R-05: a scheduled rate takes effect exactly at its ETA; nobody picks the moment ------------
 
-    function test_R05_strangerExecutesRateAndKillsInFlightSends() public {
-        P2FluxSend.RelayedSend memory s = _rs(merchant, 50e6, bytes32("rent"), 0);
-        uint256 total = _relayedTotal(s); // quoted at 0.1%
-        token.mint(payer, total);
-
+    function test_R05_rateEffectiveExactlyAtEta() public {
+        uint256 t0 = block.timestamp;
         vm.prank(admin);
         registry.scheduleRate(P2FluxFeeRegistry.Kind.Send, P2FluxFeeRegistry.Rate(11, 11, 50_000));
-        vm.warp(block.timestamp + 48 hours + 3 days); // due for days; nobody executed yet
+        (,,, uint256 eta) = registry.pendingRate(P2FluxFeeRegistry.Kind.Send);
+        assertEq(eta, t0 + 48 hours, "public, exact effective time");
+
+        // Signed at the old rate before the ETA: settles right up to ETA - 1.
+        P2FluxSend.RelayedSend memory s = _rs(merchant, 50e6, bytes32("rent"));
+        vm.warp(eta - 1);
         s.validBefore = block.timestamp + 600;
-        (uint8 v, bytes32 r, bytes32 sig) = _signRs(s, total); // API still quotes the live rate
-
-        vm.prank(attacker);
-        registry.executeRate(P2FluxFeeRegistry.Kind.Send); // front-runs the relayer
-
+        uint256 total = _relayedTotal(s);
+        token.mint(payer, 2 * total);
+        (uint8 v, bytes32 r, bytes32 sig) = _signRs(s, total);
         vm.prank(relayer);
-        vm.expectRevert(bytes("invalid authorization signature")); // signed total no longer matches
         sender.sendWithAuthorization(s, v, r, sig);
+
+        // From the ETA on, the new rate applies with no call from anyone.
+        vm.warp(eta);
+        (uint256 fee,) = sender.quote(50e6);
+        assertEq(fee, 50e6 * 11 / 10_000);
     }
 
-    // ---------------------------------------------------------------------------------------------
-    // R-06 (Informational): one order (recipient, amount, ref) can be settled once PER contract: v2
-    // splitter and v2 sponsored (and v1's two) keep separate tables for the same paymentId.
-    // ---------------------------------------------------------------------------------------------
+    // --- R-06 (accepted, API rule): one paymentId per contract table -------------------------------
 
     function test_R06_sameOrderPaidTwiceAcrossContracts() public {
         bytes32 ref = bytes32("order-42");
@@ -198,92 +202,66 @@ contract ReviewFindingsTest is ReviewBase {
         (uint8 v, bytes32 r, bytes32 s) = _signSp(p);
         vm.prank(relayer);
         sponsored.payWithAuthorization(p, v, r, s);
-
-        assertEq(
-            splitter.paymentId(address(token), merchant, 100e6, ref),
-            sponsored.paymentId(address(token), merchant, 100e6, ref)
-        );
-        assertEq(token.balanceOf(payer), 0, "buyer paid the same order twice");
+        assertEq(token.balanceOf(payer), 0, "documented: the API binds each order to ONE contract");
     }
 
-    // ---------------------------------------------------------------------------------------------
-    // R-07 (Informational / business): a relayed Send is a gasless, ref-tagged payment rail at 0.1%
-    // + 0.05, against 1% + 0.05 for a sponsored one-time payment.
-    // ---------------------------------------------------------------------------------------------
+    // --- R-07 (policy, relayer-side) and R-07b (fixed: no gas quote on Send) -----------------------
 
-    function test_R07_sendUndercutsSponsoredPayment() public {
-        // Sponsored checkout, 100 USDC: P2Flux revenue 1.00 + 0.05 fixed.
-        Sponsored.SponsoredPayment memory p = _sp(merchant, 100e6, bytes32("inv-1"), 0);
-        (uint8 v, bytes32 r, bytes32 s) = _signSp(p);
-        token.mint(payer, 100e6);
-        vm.prank(relayer);
-        sponsored.payWithAuthorization(p, v, r, s);
-        uint256 viaCheckout = token.balanceOf(feeWallet) + token.balanceOf(gasTreasury);
-
-        // Same sale as a relayed send with the invoice number as ref: merchant even gets MORE.
-        address merchant2 = makeAddr("merchant2");
-        P2FluxSend.RelayedSend memory rs = _rs(merchant2, 100e6, bytes32("inv-1"), 0);
-        uint256 total = _relayedTotal(rs);
-        token.mint(payer, total);
-        (v, r, s) = _signRs(rs, total);
-        vm.prank(relayer);
-        sender.sendWithAuthorization(rs, v, r, s);
-        uint256 viaSend = token.balanceOf(feeWallet) + token.balanceOf(gasTreasury) - viaCheckout;
-
-        assertEq(viaCheckout, 1.05e6);
-        assertEq(viaSend, 0.15e6, "P2Flux earns 0.15 instead of 1.05 on a 100 USDC sale");
-        assertEq(token.balanceOf(merchant2), 100e6);
-    }
-
-    /// R-07b: the owner rule "the API quotes zero extra gas" for Send is not enforced on chain.
-    function test_R07b_relayedSendAcceptsNetworkFee() public {
-        P2FluxSend.RelayedSend memory rs = _rs(merchant, 10e6, bytes32("x"), NETWORK_CAP);
+    function test_R07_sendIsCheaperRailDocumented() public {
+        P2FluxSend.RelayedSend memory rs = _rs(merchant, 100e6, bytes32("inv-1"));
         uint256 total = _relayedTotal(rs);
         token.mint(payer, total);
         (uint8 v, bytes32 r, bytes32 s) = _signRs(rs, total);
         vm.prank(relayer);
         sender.sendWithAuthorization(rs, v, r, s);
-        assertEq(token.balanceOf(gasTreasury), 0.05e6 + NETWORK_CAP);
+        assertEq(token.balanceOf(feeWallet) + token.balanceOf(gasTreasury), 0.15e6);
     }
 
-    // ---------------------------------------------------------------------------------------------
-    // R-08 (Informational): the recurring admin swaps the relayer instantly (no timelock, unlike
-    // every registry change), and the new relayer takes max reimbursement on every due charge.
-    // ---------------------------------------------------------------------------------------------
+    function test_R07b_relayedSendTakesNoGasQuote() public {
+        P2FluxSend.RelayedSend memory rs = _rs(merchant, 10e6, bytes32("x"));
+        uint256 total = _relayedTotal(rs);
+        assertEq(total, 10e6 + 0.01e6 + 0.05e6, "amount + 0.1% + 0.05, nothing else");
+        token.mint(payer, total + NETWORK_CAP);
+        // A signature over anything more (e.g. a gas quote on top) can never settle.
+        (uint8 v, bytes32 r, bytes32 s) = _signRs(rs, total + NETWORK_CAP);
+        vm.prank(relayer);
+        vm.expectRevert(bytes("invalid authorization signature"));
+        sender.sendWithAuthorization(rs, v, r, s);
+        (v, r, s) = _signRs(rs, total);
+        vm.prank(relayer);
+        sender.sendWithAuthorization(rs, v, r, s);
+        assertEq(token.balanceOf(gasTreasury), 0.05e6);
+    }
+
+    // --- R-08 (accepted: instant relayer swap for incident response) -------------------------------
 
     function test_R08_compromisedRecurringAdminInstantRelayer() public {
         token.mint(payer, 100e6);
         vm.prank(payer);
         token.approve(address(recurring), type(uint256).max);
-        Recurring.RecurringAuthorization memory a = _auth(merchant, 10e6, 1e6); // payer signed a loose cap
+        Recurring.RecurringAuthorization memory a = _auth(merchant, 10e6, 1e6);
         bytes memory sig = _sigRec(a);
-
         vm.prank(admin);
-        recurring.setRelayer(attacker); // same block, no delay
+        recurring.setRelayer(attacker);
         vm.prank(attacker);
         recurring.charge(a, sig, GAS_CAP);
-        assertEq(token.balanceOf(gasTreasury), 0.05e6 + GAS_CAP, "bounded by GAS_REIMBURSEMENT_HARD_CAP");
-        // Note: the reimbursement goes to gasTreasury (immutable), not to the attacker. The attacker
-        // can only make payers overpay P2Flux's own treasury; impact = payer overcharge <= cap/charge.
+        assertEq(token.balanceOf(gasTreasury), 0.05e6 + GAS_CAP, "bounded; paid to the immutable treasury");
     }
 
-    // ---------------------------------------------------------------------------------------------
-    // R-09 (Informational): executePartners is all-or-nothing; one stale entry blocks the batch.
-    // ---------------------------------------------------------------------------------------------
+    // --- R-09: no execute step any more; a batch takes effect by itself ---------------------------
 
-    function test_R09_executePartnersAllOrNothing() public {
+    function test_R09_partnerBatchNeedsNoExecute() public {
         address a = makeAddr("a");
         address b = makeAddr("b");
-        vm.prank(admin);
-        registry.schedulePartners(_one(a), true);
-        vm.warp(block.timestamp + 48 hours);
         address[] memory both = new address[](2);
         both[0] = a;
-        both[1] = b; // never scheduled
-        vm.expectRevert(P2FluxFeeRegistry.NothingPending.selector);
-        registry.executePartners(both);
-        assertFalse(registry.isPartner(a));
-        registry.executePartners(_one(a));
+        both[1] = b;
+        vm.prank(admin);
+        registry.schedulePartners(both, true);
+        vm.prank(admin);
+        registry.cancelPartner(b); // one entry cancelled does not affect the other
+        vm.warp(block.timestamp + 48 hours);
         assertTrue(registry.isPartner(a));
+        assertFalse(registry.isPartner(b));
     }
 }

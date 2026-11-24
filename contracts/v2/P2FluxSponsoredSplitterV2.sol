@@ -113,17 +113,19 @@ contract P2FluxSponsoredSplitterV2 is P2FluxV2Base, ReentrancyGuard {
     /// @notice The smallest amount that leaves `recipient` something at today's rates.
     /// @dev Closed form of: smallest a with a - floor(a*bps/1e4) > fixedFee.
     function minimumAmount(address recipient) external view returns (uint256) {
-        (uint256 bps, uint256 fixedFee) = registry.feeFor(P2FluxFeeRegistry.Kind.OneTime, recipient);
+        // `_rate` re-checks the caps, so bps <= 200 and the division is always defined.
+        (uint256 bps, uint256 fixedFee) = _rate(P2FluxFeeRegistry.Kind.OneTime, recipient);
         return (fixedFee * 10_000) / (10_000 - bps) + 1;
     }
 
     function payWithAuthorization(SponsoredPayment calldata p, uint8 v, bytes32 r, bytes32 s) external nonReentrant {
         if (msg.sender != relayer) revert NotRelayer();
-        if (p.recipient == address(0) || p.payer == address(0)) revert ZeroAddress();
+        _checkRecipient(p.recipient);
+        if (p.payer == address(0)) revert ZeroAddress();
         if (p.amount == 0) revert ZeroAmount();
         if (p.networkFee > MAX_NETWORK_FEE_HARD_CAP) revert NetworkFeeTooHigh();
 
-        (uint256 fee, uint256 fixedFee) = _fees(P2FluxFeeRegistry.Kind.OneTime, p.recipient, p.amount);
+        (uint256 fee, uint256 fixedFee) = _fees(P2FluxFeeRegistry.Kind.OneTime, p.recipient, p.amount, true);
         if (p.amount <= fee + fixedFee) revert AmountTooSmall();
 
         bytes32 id = paymentId(supportedToken, p.recipient, p.amount, p.ref);

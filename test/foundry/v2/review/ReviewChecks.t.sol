@@ -89,8 +89,7 @@ contract ReviewChecksTest is ReviewBase {
         vm.prank(merchant);
         vm.expectRevert(P2FluxFeeRegistry.NotAdmin.selector);
         registry.schedulePartners(_one(merchant), true);
-        vm.expectRevert(P2FluxFeeRegistry.NothingPending.selector);
-        registry.executePartners(_one(merchant));
+        vm.warp(block.timestamp + 30 days); // no schedule exists, so time alone changes nothing
         assertFalse(registry.isPartner(merchant));
     }
 
@@ -108,17 +107,15 @@ contract ReviewChecksTest is ReviewBase {
 
     // --- timelock -------------------------------------------------------------------------------
 
+    /// The new rate is effective exactly from schedule + 48 h, forever after, with no call needed.
     function testFuzz_C06_timelockWindowExact(uint256 t) public {
-        t = bound(t, 0, 20 days);
+        t = bound(t, 0, 400 days);
         uint256 t0 = block.timestamp;
         vm.prank(admin);
         registry.scheduleRate(P2FluxFeeRegistry.Kind.OneTime, P2FluxFeeRegistry.Rate(200, 200, 0.2e6));
         vm.warp(t0 + t);
-        bool ok = t >= 48 hours && t <= 48 hours + 7 days;
-        if (!ok) vm.expectRevert();
-        registry.executeRate(P2FluxFeeRegistry.Kind.OneTime);
         (uint16 b,,) = registry.rates(P2FluxFeeRegistry.Kind.OneTime);
-        assertEq(b, ok ? 200 : 100);
+        assertEq(b, t >= 48 hours ? 200 : 100);
     }
 
     function test_C06b_cancelAndRescheduleRestartClock() public {
@@ -130,24 +127,20 @@ contract ReviewChecksTest is ReviewBase {
         registry.scheduleRate(P2FluxFeeRegistry.Kind.OneTime, P2FluxFeeRegistry.Rate(150, 150, 0));
         vm.stopPrank();
         vm.warp(t0 + 49 hours); // due for the FIRST schedule, not for the second
-        vm.expectRevert(P2FluxFeeRegistry.TooEarly.selector);
-        registry.executeRate(P2FluxFeeRegistry.Kind.OneTime);
-        // Lapsed changes stay dead: no execute after the grace, even by admin.
-        vm.warp(t0 + 47 hours + 48 hours + 7 days + 1);
-        vm.prank(admin);
-        vm.expectRevert(P2FluxFeeRegistry.Lapsed.selector);
-        registry.executeRate(P2FluxFeeRegistry.Kind.OneTime);
+        (uint16 b,,) = registry.rates(P2FluxFeeRegistry.Kind.OneTime);
+        assertEq(b, 100);
+        vm.warp(t0 + 47 hours + 48 hours);
+        (b,,) = registry.rates(P2FluxFeeRegistry.Kind.OneTime);
+        assertEq(b, 150);
     }
 
     function test_C06c_partnerUnlistTimelockedAndRaceFree() public {
-        // Admin schedules unlist, then cancels; a stranger cannot execute the cancelled change later.
+        // Admin schedules unlist, then cancels; the cancelled change never takes effect.
         vm.prank(admin);
         registry.schedulePartners(_one(partner), false);
         vm.prank(admin);
         registry.cancelPartner(partner);
         vm.warp(block.timestamp + 3 days);
-        vm.expectRevert(P2FluxFeeRegistry.NothingPending.selector);
-        registry.executePartners(_one(partner));
         assertTrue(registry.isPartner(partner));
     }
 
@@ -165,7 +158,7 @@ contract ReviewChecksTest is ReviewBase {
         other.payWithAuthorization(p, v, r, s);
 
         // Same struct shape on Send: different domain tag, different `to`.
-        P2FluxSend.RelayedSend memory rs = P2FluxSend.RelayedSend(payer, merchant, 10e6, p.ref, 0, p.validBefore);
+        P2FluxSend.RelayedSend memory rs = P2FluxSend.RelayedSend(payer, merchant, 10e6, p.ref, p.validBefore);
         vm.prank(relayer);
         vm.expectRevert();
         sender.sendWithAuthorization(rs, v, r, s);
@@ -267,7 +260,7 @@ contract ReviewChecksTest is ReviewBase {
         vm.stopPrank();
 
         // Relayed: a signature over total +/- 1 never settles.
-        P2FluxSend.RelayedSend memory s = _rs(merchant, 10e6, bytes32("t"), 0);
+        P2FluxSend.RelayedSend memory s = _rs(merchant, 10e6, bytes32("t"));
         uint256 total = _relayedTotal(s);
         for (uint256 i; i < 2; i++) {
             (uint8 v, bytes32 r, bytes32 sig) = _signRs(s, i == 0 ? total + 1 : total - 1);

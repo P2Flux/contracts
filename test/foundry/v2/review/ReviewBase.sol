@@ -24,7 +24,7 @@ abstract contract ReviewBase is V2Test {
         splitter = new P2FluxSplitterV2(address(token), feeWallet, address(registry));
         sponsored = new Sponsored(address(token), feeWallet, gasTreasury, relayer, address(registry), NETWORK_CAP);
         recurring = new Recurring(admin, relayer, feeWallet, gasTreasury, address(token), address(registry), GAS_CAP);
-        sender = new P2FluxSend(address(token), feeWallet, gasTreasury, relayer, address(registry), NETWORK_CAP);
+        sender = new P2FluxSend(address(token), feeWallet, gasTreasury, relayer, address(registry));
     }
 
     function _sp(address recipient, uint256 amount, bytes32 ref, uint256 networkFee)
@@ -46,12 +46,8 @@ abstract contract ReviewBase is V2Test {
         );
     }
 
-    function _rs(address to, uint256 amount, bytes32 ref, uint256 networkFee)
-        internal
-        view
-        returns (P2FluxSend.RelayedSend memory)
-    {
-        return P2FluxSend.RelayedSend(payer, to, amount, ref, networkFee, block.timestamp + 600);
+    function _rs(address to, uint256 amount, bytes32 ref) internal view returns (P2FluxSend.RelayedSend memory) {
+        return P2FluxSend.RelayedSend(payer, to, amount, ref, block.timestamp + 600);
     }
 
     function _signRs(P2FluxSend.RelayedSend memory s, uint256 total) internal view returns (uint8, bytes32, bytes32) {
@@ -60,7 +56,7 @@ abstract contract ReviewBase is V2Test {
 
     function _relayedTotal(P2FluxSend.RelayedSend memory s) internal view returns (uint256) {
         (uint256 fee, uint256 fixedFee) = sender.quote(s.amount);
-        return s.amount + fee + fixedFee + s.networkFee;
+        return s.amount + fee + fixedFee;
     }
 
     function _auth(address recipient, uint256 amount, uint256 maxGas)

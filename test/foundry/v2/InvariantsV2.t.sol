@@ -110,21 +110,19 @@ contract V2Handler is Test {
         _book(amount + fee, amount, fee, 0);
     }
 
-    function sendRelayed(uint256 amount, uint256 networkFee, uint256 who) external {
+    function sendRelayed(uint256 amount, uint256 who) external {
         amount = bound(amount, 1e6, 1e12);
-        networkFee = bound(networkFee, 0, sender.MAX_NETWORK_FEE_HARD_CAP());
         (uint256 bps, uint256 fixedFee) = _bps(P2FluxFeeRegistry.Kind.Send, address(0));
         uint256 fee = amount * bps / 10_000;
-        uint256 total = amount + fee + fixedFee + networkFee;
-        P2FluxSend.RelayedSend memory s = P2FluxSend.RelayedSend(
-            payer, recipients[who % 2], amount, bytes32(nonce++), networkFee, block.timestamp + 60
-        );
+        uint256 total = amount + fee + fixedFee;
+        P2FluxSend.RelayedSend memory s =
+            P2FluxSend.RelayedSend(payer, recipients[who % 2], amount, bytes32(nonce++), block.timestamp + 60);
         (uint8 v, bytes32 r, bytes32 sig) =
             _signReceive(address(sender), total, s.validBefore, sender.authorizationNonce(s));
         token.mint(payer, total);
         vm.prank(relayer);
         sender.sendWithAuthorization(s, v, r, sig);
-        _book(total, amount, fee, fixedFee + networkFee);
+        _book(total, amount, fee, fixedFee);
     }
 
     function chargeRecurring(uint256 who, uint256 reimbursement, uint256 jump) external {
@@ -154,8 +152,7 @@ contract V2Handler is Test {
         fixedFee = uint64(bound(fixedFee, 0, 200_000));
         vm.prank(admin);
         registry.scheduleRate(k, P2FluxFeeRegistry.Rate(bps, pbps, fixedFee));
-        vm.warp(block.timestamp + 48 hours);
-        registry.executeRate(k);
+        vm.warp(block.timestamp + 48 hours); // effective by itself at the ETA
     }
 
     function _signReceive(address to, uint256 value, uint256 validBefore, bytes32 n)
@@ -183,7 +180,7 @@ contract V2InvariantTest is V2Test {
         splitter = new P2FluxSplitterV2(address(token), feeWallet, address(registry));
         sponsored = new Sponsored(address(token), feeWallet, gasTreasury, relayer, address(registry), NETWORK_CAP);
         recurring = new Recurring(admin, relayer, feeWallet, gasTreasury, address(token), address(registry), 50_000);
-        sender = new P2FluxSend(address(token), feeWallet, gasTreasury, relayer, address(registry), NETWORK_CAP);
+        sender = new P2FluxSend(address(token), feeWallet, gasTreasury, relayer, address(registry));
         handler =
             new V2Handler(token, registry, splitter, sponsored, recurring, sender, admin, relayer, merchant, partner);
         targetContract(address(handler));

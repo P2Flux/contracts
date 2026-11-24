@@ -13,15 +13,16 @@ import {P2FluxFeeRegistry} from "./P2FluxFeeRegistry.sol";
 /// @notice Send USDC to anyone. The receiver gets EXACTLY `amount`; fees are paid ON TOP by the sender.
 ///
 ///         direct  (sender pays gas):  sender debit = amount + fee
-///         relayed (sender has no gas): sender debit = amount + fee + fixedFee + networkFee
+///         relayed (sender has no gas): sender debit = amount + fee + fixedFee
 ///
 ///         fee = floor(amount * bps / 10_000), bps = registry Send rate (no partner tier).
-///         fee -> feeWallet; fixedFee + networkFee -> gasTreasury. Minimum send 1 USDC; no maximum.
+///         fee -> feeWallet; fixedFee -> gasTreasury. No separate gas quote: the fixed fee is the
+///         whole relay charge (owner decision 2026-11-24). Minimum send 1 USDC; no maximum.
 ///
 /// @dev No custody, no role beyond the relayer, no withdrawal. Direct sends take a `maxFee` so a
-///      rate change landing in the same block can never take more than the sender agreed to. Relayed
-///      sends need no such guard: the sender signs the exact total, so any other fee fails the token's
-///      signature check.
+///      rate change taking effect in the same block can never take more than the sender agreed to.
+///      Relayed sends need no such guard: the sender signs the exact total, so any other fee fails
+///      the token's signature check.
 contract P2FluxSend is P2FluxV2Base, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -30,97 +31,68 @@ contract P2FluxSend is P2FluxV2Base, ReentrancyGuard {
 
     bytes32 public constant SEND_DOMAIN = keccak256("P2FLUX_SEND_V1");
 
-    /// @notice Receives the fixed fee and the quoted network fee of relayed sends.
+    /// @notice Receives the fixed fee of relayed sends.
     address public immutable gasTreasury;
 
     /// @notice The only address that may submit a relayed send.
     address public immutable relayer;
 
-    /// @notice Per-chain ceiling on the quoted network fee, in token base units.
-    uint256 public immutable MAX_NETWORK_FEE_HARD_CAP;
-
     /// @param from Sender, the signer.
     /// @param to Receiver; gets exactly `amount`.
     /// @param amount What the receiver gets.
     /// @param ref Opaque reference.
-    /// @param networkFee Quoted gas the sender accepted. Capped.
     /// @param validBefore Quote expiry, enforced by the token.
     struct RelayedSend {
         address from;
         address to;
         uint256 amount;
         bytes32 ref;
-        uint256 networkFee;
         uint256 validBefore;
     }
 
     event Sent(
-        bytes32 indexed ref,
-        address indexed from,
-        address indexed to,
-        uint256 amount,
-        uint256 fee,
-        uint256 fixedFee,
-        uint256 networkFee
+        bytes32 indexed ref, address indexed from, address indexed to, uint256 amount, uint256 fee, uint256 fixedFee
     );
 
     error AmountTooSmall();
     error FeeAboveMax();
     error NotRelayer();
-    error NetworkFeeTooHigh();
-    error CapTooHigh();
     error ResidualBalance();
 
-    constructor(
-        address _supportedToken,
-        address _feeWallet,
-        address _gasTreasury,
-        address _relayer,
-        address _registry,
-        uint256 _maxNetworkFeeHardCap
-    ) P2FluxV2Base(_supportedToken, _feeWallet, _registry) {
+    constructor(address _supportedToken, address _feeWallet, address _gasTreasury, address _relayer, address _registry)
+        P2FluxV2Base(_supportedToken, _feeWallet, _registry)
+    {
         if (_gasTreasury == address(0) || _relayer == address(0)) revert ZeroAddress();
-        if (_maxNetworkFeeHardCap > 1e6) revert CapTooHigh(); // never more than 1 USDC of gas
         gasTreasury = _gasTreasury;
         relayer = _relayer;
-        MAX_NETWORK_FEE_HARD_CAP = _maxNetworkFeeHardCap;
     }
 
     /// @notice Fees for sending `amount` right now. `fixedFee` applies to relayed sends only.
     function quote(uint256 amount) public view returns (uint256 fee, uint256 fixedFee) {
         // Sends have no partner tier: address(0) can never be listed, so this is always `bps`.
-        return _fees(P2FluxFeeRegistry.Kind.Send, address(0), amount);
+        return _fees(P2FluxFeeRegistry.Kind.Send, address(0), amount, true);
     }
 
     /// @notice The EIP-3009 nonce a relayed send's terms produce. Binds every term.
     function authorizationNonce(RelayedSend calldata s) public view returns (bytes32) {
         return keccak256(
             abi.encode(
-                SEND_DOMAIN,
-                block.chainid,
-                address(this),
-                supportedToken,
-                s.from,
-                s.to,
-                s.amount,
-                s.ref,
-                s.networkFee,
-                s.validBefore
+                SEND_DOMAIN, block.chainid, address(this), supportedToken, s.from, s.to, s.amount, s.ref, s.validBefore
             )
         );
     }
 
     /// @notice Send from msg.sender's allowance. Reverts if the fee would exceed `maxFee`.
     function send(address to, uint256 amount, uint256 maxFee, bytes32 ref) public {
-        if (to == address(0)) revert ZeroAddress();
+        _checkRecipient(to);
         if (amount < MIN_SEND) revert AmountTooSmall();
-        (uint256 fee,) = quote(amount);
+        (uint256 fee,) = quote(amount); // sender pays gas: no fixed fee
         if (fee > maxFee) revert FeeAboveMax();
 
         IERC20(supportedToken).safeTransferFrom(msg.sender, to, amount);
         if (fee > 0) IERC20(supportedToken).safeTransferFrom(msg.sender, feeWallet, fee);
 
-        emit Sent(ref, msg.sender, to, amount, fee, 0, 0);
+        emit Sent(ref, msg.sender, to, amount, fee, 0);
     }
 
     /// @notice `send` after an EIP-2612 permit for `amount + maxFee`. A front-run permit is swallowed.
@@ -140,12 +112,12 @@ contract P2FluxSend is P2FluxV2Base, ReentrancyGuard {
     }
 
     /// @notice Relayed send: the sender signed ReceiveWithAuthorization for exactly
-    ///         `amount + fee + fixedFee + networkFee` to this contract, with `authorizationNonce(s)`.
+    ///         `amount + fee + fixedFee` to this contract, with `authorizationNonce(s)`.
     function sendWithAuthorization(RelayedSend calldata s, uint8 v, bytes32 r, bytes32 sig) external nonReentrant {
         if (msg.sender != relayer) revert NotRelayer();
-        if (s.to == address(0) || s.from == address(0)) revert ZeroAddress();
+        _checkRecipient(s.to);
+        if (s.from == address(0)) revert ZeroAddress();
         if (s.amount < MIN_SEND) revert AmountTooSmall();
-        if (s.networkFee > MAX_NETWORK_FEE_HARD_CAP) revert NetworkFeeTooHigh();
 
         (uint256 fee, uint256 fixedFee) = quote(s.amount);
         IERC20 token = IERC20(supportedToken);
@@ -154,23 +126,15 @@ contract P2FluxSend is P2FluxV2Base, ReentrancyGuard {
         // The token checks the signature over this exact value and burns the nonce (replay guard).
         IERC3009(supportedToken)
             .receiveWithAuthorization(
-                s.from,
-                address(this),
-                s.amount + fee + fixedFee + s.networkFee,
-                0,
-                s.validBefore,
-                authorizationNonce(s),
-                v,
-                r,
-                sig
+                s.from, address(this), s.amount + fee + fixedFee, 0, s.validBefore, authorizationNonce(s), v, r, sig
             );
 
         token.safeTransfer(s.to, s.amount);
         if (fee > 0) token.safeTransfer(feeWallet, fee);
-        if (fixedFee + s.networkFee > 0) token.safeTransfer(gasTreasury, fixedFee + s.networkFee);
+        if (fixedFee > 0) token.safeTransfer(gasTreasury, fixedFee);
 
         if (token.balanceOf(address(this)) != heldBefore) revert ResidualBalance();
 
-        emit Sent(s.ref, s.from, s.to, s.amount, fee, fixedFee, s.networkFee);
+        emit Sent(s.ref, s.from, s.to, s.amount, fee, fixedFee);
     }
 }

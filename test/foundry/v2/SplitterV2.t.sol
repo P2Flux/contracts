@@ -29,7 +29,7 @@ contract SplitterV2Test is V2Test {
     /// buyer debit == amount; recipient == amount - fee; fee wallet == fee; standard and partner.
     function testFuzz_conservation(uint256 amount, bytes32 ref, uint256 seed, bool asPartner) public {
         amount = bound(amount, 1, 1e18);
-        address recipient = asPartner ? partner : _cleanAddress(seed, address(splitter));
+        address recipient = asPartner ? partner : _cleanV2(seed, address(splitter));
         token.mint(payer, amount);
         _pay(recipient, amount, ref);
         uint256 fee = (amount * (asPartner ? ONE_TIME_PARTNER_BPS : ONE_TIME_BPS)) / 10_000;
@@ -129,5 +129,22 @@ contract SplitterV2Test is V2Test {
         vm.expectRevert(abi.encodeWithSignature("SafeERC20FailedOperation(address)", address(t)));
         s2.pay(address(t), makeAddr("m"), 1e6, "a");
         assertFalse(s2.isPaymentProcessed(address(t), makeAddr("m"), 1e6, "a"));
+    }
+
+    /// R-01 regression: paying the splitter itself is refused (it would be locked forever).
+    function test_selfRecipientRefused() public {
+        token.mint(payer, 100e6);
+        vm.prank(payer);
+        vm.expectRevert(P2FluxV2Base.InvalidRecipient.selector);
+        splitter.pay(address(token), address(splitter), 100e6, "oops");
+    }
+
+    /// R-04: the buyer pays their own gas here, so no fixed fee, whatever the registry's fixed fee is.
+    function test_noFixedFeeWhenBuyerPaysGas() public {
+        _setRate(P2FluxFeeRegistry.Kind.OneTime, 100, 75, 200_000);
+        token.mint(payer, 10e6);
+        _pay(makeAddr("m"), 10e6, "a");
+        assertEq(token.balanceOf(makeAddr("m")), 9.9e6);
+        assertEq(token.balanceOf(gasTreasury), 0);
     }
 }

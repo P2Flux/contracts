@@ -194,7 +194,14 @@ contract P2FluxRecurringV2 is P2FluxV2Base, EIP712, ReentrancyGuard {
     }
 
     /// @notice Whether `charge` would currently pass its own preconditions (signature not checked).
+    /// @dev Also false when the amount no longer covers the fees at the CURRENT rates, counted as a
+    ///      relayer charge (with the fixed fee): a fee increase can make a small subscription
+    ///      unchargeable, and the relayer's scheduler must see that rather than waste gas on reverts.
     function isChargeable(RecurringAuthorization calldata auth) external view returns (bool) {
+        if (auth.recipient == address(0) || auth.recipient == address(this)) return false;
+        if (auth.token != supportedToken || auth.amount == 0) return false;
+        (uint256 fee, uint256 fixedFee) = _fees(P2FluxFeeRegistry.Kind.Recurring, auth.recipient, auth.amount, true);
+        if (auth.amount <= fee + fixedFee) return false;
         if (auth.period == 0 || block.timestamp < auth.start) return false;
         if (auth.end != 0 && block.timestamp >= auth.end) return false;
         bytes32 id = subscriptionId(auth);
@@ -221,7 +228,7 @@ contract P2FluxRecurringV2 is P2FluxV2Base, EIP712, ReentrancyGuard {
         external
         nonReentrant
     {
-        if (auth.recipient == address(0)) revert ZeroAddress();
+        _checkRecipient(auth.recipient);
         if (auth.token != supportedToken) revert TokenNotSupported();
         if (auth.amount == 0) revert ZeroAmount();
         if (auth.period == 0) revert ZeroPeriod();
@@ -249,7 +256,9 @@ contract P2FluxRecurringV2 is P2FluxV2Base, EIP712, ReentrancyGuard {
         // debited `amount + reimbursement` and nothing more. Rounding on the profit fee favours the
         // merchant. The seller must be left with something: an amount that cannot cover both fees
         // is refused outright rather than silently paying the merchant zero.
-        (uint256 fee, uint256 fixedFee) = _fees(P2FluxFeeRegistry.Kind.Recurring, auth.recipient, auth.amount);
+        // The fixed fee only when P2Flux's relayer runs (and pays the gas for) the charge.
+        (uint256 fee, uint256 fixedFee) =
+            _fees(P2FluxFeeRegistry.Kind.Recurring, auth.recipient, auth.amount, msg.sender == relayer);
         if (auth.amount <= fee + fixedFee) revert AmountTooSmall();
         uint256 net = auth.amount - fee - fixedFee;
 

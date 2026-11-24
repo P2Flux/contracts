@@ -49,14 +49,14 @@ contract P2FluxSplitterV2 is P2FluxV2Base {
     /// @notice Pay `amount` to `recipient`, fee out of the amount, from msg.sender's allowance.
     function pay(address token, address recipient, uint256 amount, bytes32 ref) public {
         if (token != supportedToken) revert TokenNotSupported();
-        if (recipient == address(0)) revert ZeroAddress();
+        _checkRecipient(recipient);
         if (amount == 0) revert ZeroAmount();
 
         bytes32 id = paymentId(token, recipient, amount, ref);
         if (processedPayments[id]) revert PaymentAlreadyProcessed(id);
         processedPayments[id] = true;
 
-        (uint256 fee,) = _fees(P2FluxFeeRegistry.Kind.OneTime, recipient, amount);
+        (uint256 fee,) = _fees(P2FluxFeeRegistry.Kind.OneTime, recipient, amount, false); // buyer pays gas: no fixed fee
 
         IERC20(token).safeTransferFrom(msg.sender, recipient, amount - fee);
         if (fee > 0) IERC20(token).safeTransferFrom(msg.sender, feeWallet, fee);

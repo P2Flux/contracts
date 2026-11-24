@@ -43,7 +43,7 @@ contract SponsoredSplitterV2Test is V2Test {
     function testFuzz_conservation(uint256 amount, uint256 networkFee, bytes32 ref, uint256 seed, bool asPartner)
         public
     {
-        address recipient = asPartner ? partner : _cleanAddress(seed, address(splitter));
+        address recipient = asPartner ? partner : _cleanV2(seed, address(splitter));
         amount = bound(amount, splitter.minimumAmount(recipient), 1e18);
         networkFee = bound(networkFee, 0, NETWORK_CAP);
         token.mint(payer, amount + networkFee);
@@ -196,5 +196,12 @@ contract SponsoredSplitterV2Test is V2Test {
         new Sponsored(address(token), feeWallet, gasTreasury, address(0), address(registry), NETWORK_CAP);
         vm.expectRevert(Sponsored.CapTooHigh.selector);
         new Sponsored(address(token), feeWallet, gasTreasury, relayer, address(registry), 1e6 + 1);
+    }
+
+    /// R-01 regression.
+    function test_selfRecipientRefused() public {
+        vm.prank(relayer);
+        vm.expectRevert(P2FluxV2Base.InvalidRecipient.selector);
+        splitter.payWithAuthorization(_terms(address(splitter), 5e6, "a", 0), 0, 0, 0);
     }
 }

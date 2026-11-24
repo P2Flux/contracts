@@ -71,7 +71,7 @@ contract ReviewForkTest is Test {
         splitter = new P2FluxSplitterV2(address(USDC), feeWallet, address(registry));
         sponsored = new Sponsored(address(USDC), feeWallet, gasTreasury, relayer, address(registry), 0.25e6);
         recurring = new Recurring(admin, relayer, feeWallet, gasTreasury, address(USDC), address(registry), 0.05e6);
-        sender = new P2FluxSend(address(USDC), feeWallet, gasTreasury, relayer, address(registry), 0.25e6);
+        sender = new P2FluxSend(address(USDC), feeWallet, gasTreasury, relayer, address(registry));
         // Local fork only: become a minter and mint test USDC to the test payer.
         vm.prank(USDC.masterMinter());
         USDC.configureMinter(address(this), 1_000_000e6);
@@ -122,7 +122,7 @@ contract ReviewForkTest is Test {
         vm.expectRevert();
         USDC.receiveWithAuthorization(payer, address(sponsored), 10e6, 0, p.validBefore, n, v, r, s);
         // And another P2Flux contract cannot spend it either.
-        P2FluxSend.RelayedSend memory rs = P2FluxSend.RelayedSend(payer, merchant, 10e6, p.ref, 0, p.validBefore);
+        P2FluxSend.RelayedSend memory rs = P2FluxSend.RelayedSend(payer, merchant, 10e6, p.ref, p.validBefore);
         vm.prank(relayer);
         vm.expectRevert();
         sender.sendWithAuthorization(rs, v, r, s);
@@ -131,7 +131,7 @@ contract ReviewForkTest is Test {
 
     function test_fork_relayedSendAndRateChange() public onlyFork {
         P2FluxSend.RelayedSend memory s =
-            P2FluxSend.RelayedSend(payer, merchant, 100e6, bytes32("f3"), 0, block.timestamp + 3 days);
+            P2FluxSend.RelayedSend(payer, merchant, 100e6, bytes32("f3"), block.timestamp + 3 days);
         (uint256 fee, uint256 fixedFee) = sender.quote(s.amount);
         uint256 total = s.amount + fee + fixedFee;
         (uint8 v, bytes32 r, bytes32 sig) =
@@ -139,8 +139,7 @@ contract ReviewForkTest is Test {
 
         vm.prank(admin);
         registry.scheduleRate(Reg.Kind.Send, Reg.Rate(20, 20, 50_000));
-        vm.warp(block.timestamp + 48 hours);
-        registry.executeRate(Reg.Kind.Send);
+        vm.warp(block.timestamp + 48 hours); // effective at the ETA, no call
 
         vm.prank(relayer);
         vm.expectRevert(); // real FiatToken signature check rejects the old total

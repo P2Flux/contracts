@@ -55,56 +55,59 @@ contract FeeRegistryTest is V2Test {
         new P2FluxFeeRegistry(admin, ok, ok, _rate(0, 0, 200_001));
     }
 
-    // --- rate timelock ---
+    // --- rate timelock: auto-effective at the ETA, no execute ---
 
-    function test_rate_schedule_execute() public {
+    function _bpsNow(P2FluxFeeRegistry.Kind k, address r) internal view returns (uint256 bps) {
+        (bps,) = registry.feeFor(k, r);
+    }
+
+    function test_rate_effectiveExactlyAtEta() public {
+        uint256 t0 = block.timestamp;
         vm.prank(admin);
         registry.scheduleRate(ONE, _rate(120, 90, 60_000));
-        assertEq(registry.pendingRateEta(ONE), block.timestamp + 48 hours);
-        (uint16 b, uint16 pb, uint64 f) = registry.pendingRates(ONE);
+        (uint16 b, uint16 pb, uint64 f, uint256 eta) = registry.pendingRate(ONE);
+        assertEq(eta, t0 + 48 hours);
         assertEq(b, 120);
         assertEq(pb, 90);
         assertEq(f, 60_000);
-        // still the old rate while pending
-        (uint256 bps,) = registry.feeFor(ONE, address(1));
-        assertEq(bps, 100);
-
-        vm.warp(block.timestamp + 48 hours);
-        vm.prank(makeAddr("anyone"));
-        registry.executeRate(ONE);
-        (bps,) = registry.feeFor(ONE, address(1));
-        assertEq(bps, 120);
-        (bps,) = registry.feeFor(ONE, partner);
-        assertEq(bps, 90);
-        assertEq(registry.pendingRateEta(ONE), 0);
+        vm.warp(t0 + 48 hours - 1);
+        assertEq(_bpsNow(ONE, address(1)), 100, "old rate until the ETA");
+        vm.warp(t0 + 48 hours);
+        assertEq(_bpsNow(ONE, address(1)), 120, "new rate at the ETA, nobody called anything");
+        assertEq(_bpsNow(ONE, partner), 90);
+        (,,, eta) = registry.pendingRate(ONE);
+        assertEq(eta, 0, "nothing pending once effective");
+        vm.warp(t0 + 365 days);
+        assertEq(_bpsNow(ONE, address(1)), 120, "stays");
     }
 
-    function test_rate_tooEarly() public {
+    function testFuzz_rate_effectiveByTimestampOnly(uint256 t) public {
+        t = bound(t, 0, 30 days);
+        uint256 t0 = block.timestamp;
+        vm.prank(admin);
+        registry.scheduleRate(ONE, _rate(200, 200, 200_000));
+        vm.warp(t0 + t);
+        assertEq(_bpsNow(ONE, address(1)), t >= 48 hours ? 200 : 100);
+    }
+
+    function test_rate_cancelBeforeEta() public {
         vm.prank(admin);
         registry.scheduleRate(ONE, _rate(120, 90, 60_000));
         vm.warp(block.timestamp + 48 hours - 1);
-        vm.expectRevert(P2FluxFeeRegistry.TooEarly.selector);
-        registry.executeRate(ONE);
-    }
-
-    function test_rate_lapsed() public {
-        vm.prank(admin);
-        registry.scheduleRate(ONE, _rate(120, 90, 60_000));
-        vm.warp(block.timestamp + 48 hours + 7 days + 1);
-        vm.expectRevert(P2FluxFeeRegistry.Lapsed.selector);
-        registry.executeRate(ONE);
-    }
-
-    function test_rate_cancel() public {
-        vm.prank(admin);
-        registry.scheduleRate(ONE, _rate(120, 90, 60_000));
         vm.prank(admin);
         registry.cancelRate(ONE);
+        vm.warp(block.timestamp + 30 days);
+        assertEq(_bpsNow(ONE, address(1)), 100);
+    }
+
+    function test_rate_cannotCancelOnceEffective() public {
+        vm.prank(admin);
+        registry.scheduleRate(ONE, _rate(120, 90, 60_000));
         vm.warp(block.timestamp + 48 hours);
+        vm.prank(admin);
         vm.expectRevert(P2FluxFeeRegistry.NothingPending.selector);
-        registry.executeRate(ONE);
-        (uint256 bps,) = registry.feeFor(ONE, address(1));
-        assertEq(bps, 100);
+        registry.cancelRate(ONE);
+        assertEq(_bpsNow(ONE, address(1)), 120);
     }
 
     function test_rate_cancelNothingPending() public {
@@ -113,20 +116,28 @@ contract FeeRegistryTest is V2Test {
         registry.cancelRate(ONE);
     }
 
-    function test_rate_executeNothingPending() public {
-        vm.expectRevert(P2FluxFeeRegistry.NothingPending.selector);
-        registry.executeRate(REC);
-    }
-
     function test_rate_rescheduleRestartsClock() public {
+        uint256 t0 = block.timestamp;
         vm.prank(admin);
         registry.scheduleRate(ONE, _rate(120, 90, 60_000));
-        vm.warp(block.timestamp + 47 hours);
+        vm.warp(t0 + 47 hours);
         vm.prank(admin);
         registry.scheduleRate(ONE, _rate(130, 90, 60_000));
-        vm.warp(block.timestamp + 1 hours);
-        vm.expectRevert(P2FluxFeeRegistry.TooEarly.selector);
-        registry.executeRate(ONE);
+        vm.warp(t0 + 49 hours);
+        assertEq(_bpsNow(ONE, address(1)), 100, "first schedule replaced, second not due");
+        vm.warp(t0 + 47 hours + 48 hours);
+        assertEq(_bpsNow(ONE, address(1)), 130);
+    }
+
+    /// Scheduling after a change took effect keeps that change as the base, not the original.
+    function test_rate_scheduleAfterEffectiveRollsForward() public {
+        _setRate(ONE, 120, 90, 60_000);
+        vm.prank(admin);
+        registry.scheduleRate(ONE, _rate(150, 90, 60_000));
+        assertEq(_bpsNow(ONE, address(1)), 120, "the effective change is the current rate");
+        vm.prank(admin);
+        registry.cancelRate(ONE);
+        assertEq(_bpsNow(ONE, address(1)), 120, "cancel returns to it, not to the original 100");
     }
 
     function test_rate_kindsAreIndependent() public {
@@ -156,9 +167,7 @@ contract FeeRegistryTest is V2Test {
         vm.prank(admin);
         if (!ok) vm.expectRevert(P2FluxFeeRegistry.RateAboveCap.selector);
         registry.scheduleRate(ONE, P2FluxFeeRegistry.Rate(bps, pbps, fixedFee));
-        if (!ok) return;
         vm.warp(block.timestamp + 48 hours);
-        registry.executeRate(ONE);
         (uint256 b, uint256 f) = registry.feeFor(ONE, address(1));
         assertLe(b, registry.MAX_BPS());
         assertLe(f, registry.MAX_FIXED_FEE());
@@ -166,17 +175,16 @@ contract FeeRegistryTest is V2Test {
 
     // --- partner timelock ---
 
-    function test_partner_scheduleExecute() public {
+    function test_partner_effectiveAtEta() public {
         address m = makeAddr("m");
         vm.prank(admin);
         registry.schedulePartners(_one(m), true);
-        assertFalse(registry.isPartner(m));
-        assertTrue(registry.pendingPartner(m));
+        (bool next, uint256 eta) = registry.pendingPartner(m);
+        assertTrue(next);
+        assertEq(eta, block.timestamp + 48 hours);
         vm.warp(block.timestamp + 48 hours - 1);
-        vm.expectRevert(P2FluxFeeRegistry.TooEarly.selector);
-        registry.executePartners(_one(m));
+        assertFalse(registry.isPartner(m));
         vm.warp(block.timestamp + 1);
-        registry.executePartners(_one(m));
         assertTrue(registry.isPartner(m));
     }
 
@@ -185,7 +193,6 @@ contract FeeRegistryTest is V2Test {
         registry.schedulePartners(_one(partner), false);
         assertTrue(registry.isPartner(partner), "still a partner while pending");
         vm.warp(block.timestamp + 48 hours);
-        registry.executePartners(_one(partner));
         assertFalse(registry.isPartner(partner));
     }
 
@@ -196,20 +203,20 @@ contract FeeRegistryTest is V2Test {
         vm.prank(admin);
         registry.cancelPartner(m);
         vm.warp(block.timestamp + 48 hours);
-        vm.expectRevert(P2FluxFeeRegistry.NothingPending.selector);
-        registry.executePartners(_one(m));
+        assertFalse(registry.isPartner(m));
         vm.prank(admin);
         vm.expectRevert(P2FluxFeeRegistry.NothingPending.selector);
         registry.cancelPartner(m);
     }
 
-    function test_partner_lapsed() public {
+    function test_partner_cannotCancelOnceEffective() public {
         address m = makeAddr("m");
         vm.prank(admin);
         registry.schedulePartners(_one(m), true);
-        vm.warp(block.timestamp + 48 hours + 7 days + 1);
-        vm.expectRevert(P2FluxFeeRegistry.Lapsed.selector);
-        registry.executePartners(_one(m));
+        vm.warp(block.timestamp + 48 hours);
+        vm.prank(admin);
+        vm.expectRevert(P2FluxFeeRegistry.NothingPending.selector);
+        registry.cancelPartner(m);
     }
 
     function test_partner_zeroAddressRefused() public {
@@ -218,6 +225,7 @@ contract FeeRegistryTest is V2Test {
         registry.schedulePartners(_one(address(0)), true);
     }
 
+    /// R-09 is gone with execute: a batch never needs a second call, so a stale entry cannot block it.
     function test_partner_batch() public {
         address[] memory list = new address[](3);
         list[0] = makeAddr("a");
@@ -226,7 +234,6 @@ contract FeeRegistryTest is V2Test {
         vm.prank(admin);
         registry.schedulePartners(list, true);
         vm.warp(block.timestamp + 48 hours);
-        registry.executePartners(list);
         for (uint256 i; i < 3; i++) {
             assertTrue(registry.isPartner(list[i]));
         }

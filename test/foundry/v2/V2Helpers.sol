@@ -29,20 +29,26 @@ abstract contract V2Test is P2FluxTest {
         _listPartner(partner, true);
     }
 
+    /// @dev Changes take effect by themselves DELAY after scheduling: schedule, then let time pass.
     function _listPartner(address who, bool value) internal {
         address[] memory list = new address[](1);
         list[0] = who;
         vm.prank(admin);
         registry.schedulePartners(list, value);
         vm.warp(block.timestamp + registry.DELAY());
-        registry.executePartners(list);
     }
 
     function _setRate(P2FluxFeeRegistry.Kind kind, uint256 bps, uint256 partnerBps, uint256 fixedFee) internal {
         vm.prank(admin);
         registry.scheduleRate(kind, P2FluxFeeRegistry.Rate(uint16(bps), uint16(partnerBps), uint64(fixedFee)));
         vm.warp(block.timestamp + registry.DELAY());
-        registry.executeRate(kind);
+    }
+
+    /// @dev `_cleanAddress` that also excludes the listed partner (T-01: a fuzzed "non-partner"
+    ///      recipient must never be the partner).
+    function _cleanV2(uint256 seed, address extra) internal view returns (address a) {
+        a = _cleanAddress(seed, extra);
+        vm.assume(a != partner);
     }
 }
 

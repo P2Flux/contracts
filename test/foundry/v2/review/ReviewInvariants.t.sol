@@ -72,8 +72,34 @@ contract ReviewHandler is Test {
         token.approve(address(recurring), type(uint256).max);
     }
 
+    /// @dev Ghost: roll a pending value into live once its ETA has passed (what the registry reads).
+    function _roll(uint256 kind) internal {
+        if (pendingEta[kind] != 0 && block.timestamp >= pendingEta[kind]) {
+            live[kind] = pending[kind];
+            delete pendingEta[kind];
+            executes++;
+        }
+    }
+
+    function _rollPartner() internal {
+        if (pendingPEta != 0 && block.timestamp >= pendingPEta) {
+            ghostPartner = pendingP;
+            pendingPEta = 0;
+        }
+    }
+
+    function liveNow(uint256 kind) external view returns (uint16, uint16, uint64) {
+        G memory g = (pendingEta[kind] != 0 && block.timestamp >= pendingEta[kind]) ? pending[kind] : live[kind];
+        return (g.bps, g.pbps, g.fixedFee);
+    }
+
+    function partnerNow() external view returns (bool) {
+        return (pendingPEta != 0 && block.timestamp >= pendingPEta) ? pendingP : ghostPartner;
+    }
+
     function schedule(uint256 kind, uint16 bps, uint16 pbps, uint64 fixedFee) external {
         kind %= 3;
+        _roll(kind);
         bps = uint16(bound(bps, 0, 260)); // sometimes above the 200 cap
         pbps = uint16(bound(pbps, 0, 260));
         fixedFee = uint64(bound(fixedFee, 0, 0.25e6));
@@ -90,6 +116,7 @@ contract ReviewHandler is Test {
 
     function cancel(uint256 kind) external {
         kind %= 3;
+        _roll(kind);
         vm.prank(admin);
         try registry.cancelRate(Reg.Kind(kind)) {
             if (pendingEta[kind] == 0) mismatches++;
@@ -99,22 +126,22 @@ contract ReviewHandler is Test {
         }
     }
 
-    function execute(uint256 kind, address who) external {
+    /// A stranger tries to cancel or schedule: always refused (there is no execute any more).
+    function strangerTries(uint256 kind, address who) external {
+        vm.assume(who != admin);
         kind %= 3;
-        uint256 eta = pendingEta[kind];
-        bool should = eta != 0 && block.timestamp >= eta && block.timestamp <= eta + 7 days;
         vm.prank(who);
-        try registry.executeRate(Reg.Kind(kind)) {
-            if (!should) mismatches++;
-            live[kind] = pending[kind];
-            delete pendingEta[kind];
-            executes++;
-        } catch {
-            if (should) mismatches++;
-        }
+        try registry.cancelRate(Reg.Kind(kind)) {
+            mismatches++;
+        } catch {}
+        vm.prank(who);
+        try registry.scheduleRate(Reg.Kind(kind), Reg.Rate(0, 0, 0)) {
+            mismatches++;
+        } catch {}
     }
 
     function schedulePartner(bool value) external {
+        _rollPartner();
         address[] memory l = new address[](1);
         l[0] = merchant;
         vm.prank(admin);
@@ -123,17 +150,14 @@ contract ReviewHandler is Test {
         pendingPEta = block.timestamp + 48 hours;
     }
 
-    function executePartner(address who) external {
-        address[] memory l = new address[](1);
-        l[0] = merchant;
-        bool should = pendingPEta != 0 && block.timestamp >= pendingPEta && block.timestamp <= pendingPEta + 7 days;
-        vm.prank(who);
-        try registry.executePartners(l) {
-            if (!should) mismatches++;
-            ghostPartner = pendingP;
+    function cancelPartner() external {
+        _rollPartner();
+        vm.prank(admin);
+        try registry.cancelPartner(merchant) {
+            if (pendingPEta == 0) mismatches++;
             pendingPEta = 0;
         } catch {
-            if (should) mismatches++;
+            if (pendingPEta != 0) mismatches++;
         }
     }
 
@@ -164,7 +188,7 @@ contract ReviewHandler is Test {
         uint256 total = amount + fee + fixedFee;
         if (fee > amount * 200 / 10_000 || fixedFee > 0.2e6) capBreaches++;
         P2FluxSend.RelayedSend memory s =
-            P2FluxSend.RelayedSend(payer, merchant, amount, bytes32(nonce++), 0, block.timestamp + 60);
+            P2FluxSend.RelayedSend(payer, merchant, amount, bytes32(nonce++), block.timestamp + 60);
         (uint8 v, bytes32 r, bytes32 sig) = _sign(address(sender), total, s.validBefore, sender.authorizationNonce(s));
         token.mint(payer, total);
         uint256 before = token.balanceOf(merchant);
@@ -215,7 +239,7 @@ contract ReviewInvariantTest is ReviewBase {
         assertEq(h.mismatches(), 0, "a schedule/cancel/execute outcome disagreed with the model");
         for (uint256 k; k < 3; k++) {
             (uint16 b, uint16 pb, uint64 f) = registry.rates(Reg.Kind(k));
-            (uint16 gb, uint16 gpb, uint64 gf) = h.live(k);
+            (uint16 gb, uint16 gpb, uint64 gf) = h.liveNow(k);
             assertEq(b, gb);
             assertEq(pb, gpb);
             assertEq(f, gf);
@@ -223,7 +247,7 @@ contract ReviewInvariantTest is ReviewBase {
             assertLe(pb, b);
             assertLe(f, 0.2e6);
         }
-        assertEq(registry.isPartner(merchant), h.ghostPartner());
+        assertEq(registry.isPartner(merchant), h.partnerNow());
     }
 
     /// Payers are never debited more than agreed and merchants never lose more than the caps.
@@ -234,7 +258,7 @@ contract ReviewInvariantTest is ReviewBase {
 
     /// Coverage evidence: successful rate executions and payments in each run.
     function afterInvariant() public view {
-        console2.log("executes", h.executes(), "payments", h.payments());
+        console2.log("rate changes effective", h.executes(), "payments", h.payments());
     }
 
     function invariant_R_noCustody() public view {
