@@ -1,0 +1,129 @@
+{
+  "network": "Base Sepolia",
+  "chainId": 84532,
+  "version": "v2",
+  "status": "test",
+  "deployedAt": "2026-11-24",
+  "commit": "8079ad1480c533715ef97f4e3d4147d81a073347",
+  "branch": "feat/contracts-v2",
+  "script": "script/DeployV2.s.sol",
+  "compiler": {
+    "solc": "0.8.26",
+    "evmVersion": "cancun",
+    "optimizer": true,
+    "runs": 200
+  },
+  "deployer": "0xf8B6C32b9A8Cd683356cFc648c3e28C341446C8B",
+  "admin": "0x1Aa8bb19484a0C601888F80a3fA0C31bA3EAF825",
+  "relayer": "0xC6bec1306F4FA2a81e41945f739829DAfD5908EC",
+  "feeWallet": "0x6f02e3466AD09B8cDa31a8dae8C12d809ED14c9a",
+  "gasTreasury": "0x0d3bd2a7331a9c5aDb1234fA955327905c5C24FC",
+  "usdc": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+  "notes": "All role wallets are test-only (p2flux-testkey v2-sepolia-*); relayer is the existing test API relayer (address read on chain from the v1 Sepolia sponsored splitter). Plain CREATE, no CREATE2.",
+  "initialRates": {
+    "oneTime": {
+      "bps": 100,
+      "partnerBps": 75,
+      "fixedFee": 50000
+    },
+    "recurring": {
+      "bps": 150,
+      "partnerBps": 125,
+      "fixedFee": 50000
+    },
+    "send": {
+      "bps": 10,
+      "partnerBps": 10,
+      "fixedFee": 50000
+    }
+  },
+  "caps": {
+    "maxBps": 200,
+    "maxFixedFee": 200000,
+    "delaySeconds": 172800,
+    "maxNetworkFeeHardCap": 250000,
+    "gasReimbursementHardCap": 50000
+  },
+  "contracts": {
+    "P2FluxFeeRegistry": {
+      "address": "0x7721D8B78F63bBaA124ED674e5D82f6e6029061d",
+      "txHash": "0xaeaf7a5f4af9d975d46b072dd0878da5f27dd4f2420f732fe0c0aa09037aebbf",
+      "block": 62913301,
+      "gasUsed": 1106112,
+      "constructorArgs": {
+        "admin": "0x1Aa8bb19484a0C601888F80a3fA0C31bA3EAF825",
+        "oneTime(bps,partnerBps,fixedFee)": "(100, 75, 50000)",
+        "recurring(bps,partnerBps,fixedFee)": "(150, 125, 50000)",
+        "send(bps,partnerBps,fixedFee)": "(10, 10, 50000)"
+      },
+      "explorer": "https://sepolia.basescan.org/address/0x7721D8B78F63bBaA124ED674e5D82f6e6029061d",
+      "sourcify": "https://repo.sourcify.dev/84532/0x7721D8B78F63bBaA124ED674e5D82f6e6029061d",
+      "sourcifyMatch": "exact_match"
+    },
+    "P2FluxSplitterV2": {
+      "address": "0xb652A0dE66d12D81B5081Bd898066907f27BA632",
+      "txHash": "0xb876c1f64ae674cc3f7981626a7167d3141212dc020294b0c1d15840d1c187a8",
+      "block": 62913303,
+      "gasUsed": 664756,
+      "constructorArgs": {
+        "supportedToken": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        "feeWallet": "0x6f02e3466AD09B8cDa31a8dae8C12d809ED14c9a",
+        "registry": "0x7721D8B78F63bBaA124ED674e5D82f6e6029061d"
+      },
+      "explorer": "https://sepolia.basescan.org/address/0xb652A0dE66d12D81B5081Bd898066907f27BA632",
+      "sourcify": "https://repo.sourcify.dev/84532/0xb652A0dE66d12D81B5081Bd898066907f27BA632",
+      "sourcifyMatch": "exact_match"
+    },
+    "P2FluxSponsoredSplitterV2": {
+      "address": "0x540E1ee63b9f06d7C22952f628A0695cBF606fC2",
+      "txHash": "0x421117a4e09e87f1a612a123bb47d2544354ca7b5f6c376aadc42c0609b7d1ce",
+      "block": 62913306,
+      "gasUsed": 1029704,
+      "constructorArgs": {
+        "supportedToken": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        "feeWallet": "0x6f02e3466AD09B8cDa31a8dae8C12d809ED14c9a",
+        "gasTreasury": "0x0d3bd2a7331a9c5aDb1234fA955327905c5C24FC",
+        "relayer": "0xC6bec1306F4FA2a81e41945f739829DAfD5908EC",
+        "registry": "0x7721D8B78F63bBaA124ED674e5D82f6e6029061d",
+        "maxNetworkFeeHardCap": "250000"
+      },
+      "explorer": "https://sepolia.basescan.org/address/0x540E1ee63b9f06d7C22952f628A0695cBF606fC2",
+      "sourcify": "https://repo.sourcify.dev/84532/0x540E1ee63b9f06d7C22952f628A0695cBF606fC2",
+      "sourcifyMatch": "exact_match"
+    },
+    "P2FluxRecurringV2": {
+      "address": "0x409e672cBA651B49064Aa4B5516e93dff8304DD7",
+      "txHash": "0xf22171276b08b888a42163d3f307febacb24ce6d16c1545a68f5d1fd54cf835b",
+      "block": 62913308,
+      "gasUsed": 1797652,
+      "constructorArgs": {
+        "admin": "0x1Aa8bb19484a0C601888F80a3fA0C31bA3EAF825",
+        "relayer": "0xC6bec1306F4FA2a81e41945f739829DAfD5908EC",
+        "feeWallet": "0x6f02e3466AD09B8cDa31a8dae8C12d809ED14c9a",
+        "gasTreasury": "0x0d3bd2a7331a9c5aDb1234fA955327905c5C24FC",
+        "supportedToken": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        "registry": "0x7721D8B78F63bBaA124ED674e5D82f6e6029061d",
+        "gasReimbursementHardCap": "50000"
+      },
+      "explorer": "https://sepolia.basescan.org/address/0x409e672cBA651B49064Aa4B5516e93dff8304DD7",
+      "sourcify": "https://repo.sourcify.dev/84532/0x409e672cBA651B49064Aa4B5516e93dff8304DD7",
+      "sourcifyMatch": "exact_match"
+    },
+    "P2FluxSend": {
+      "address": "0xc97eFaf3e8e7c0538441408319c76570e81BbD4A",
+      "txHash": "0xb5ac1ef7d86aeb9e6b34255d356633bc79166c01dc44904680fff3330c1feb21",
+      "block": 62913311,
+      "gasUsed": 1029417,
+      "constructorArgs": {
+        "supportedToken": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        "feeWallet": "0x6f02e3466AD09B8cDa31a8dae8C12d809ED14c9a",
+        "gasTreasury": "0x0d3bd2a7331a9c5aDb1234fA955327905c5C24FC",
+        "relayer": "0xC6bec1306F4FA2a81e41945f739829DAfD5908EC",
+        "registry": "0x7721D8B78F63bBaA124ED674e5D82f6e6029061d"
+      },
+      "explorer": "https://sepolia.basescan.org/address/0xc97eFaf3e8e7c0538441408319c76570e81BbD4A",
+      "sourcify": "https://repo.sourcify.dev/84532/0xc97eFaf3e8e7c0538441408319c76570e81BbD4A",
+      "sourcifyMatch": "exact_match"
+    }
+  }
+}
