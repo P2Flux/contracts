@@ -352,6 +352,11 @@ payment (N-03).
 - **Q6** Admin: which multisig (Safe, how many signers), same address on all chains?
 - **Q7** Send has no partner tier. Needed?
 - **Q8** Order of chains after Base, and Arc token capabilities (§8.2).
+- **Q9** (from the 2026-11-24 `auto` fee mode in the API) Cross-check between the sponsored and the plain
+  splitter: should each refuse a `(recipient, amount, ref)` the other already settled (one shared replay
+  table, or a read of the other contract's `isPaymentProcessed` before settling)? Today the API narrows the
+  window (it refuses the other half once one has settled or is pending, see R-06) and tells the merchant by
+  a `payment.duplicate` webhook if a second settlement still lands; only the contracts can close it.
 
 ## 13. Backend and ops rules (from the 2026-11-24 review)
 
