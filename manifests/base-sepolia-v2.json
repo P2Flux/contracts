@@ -2,9 +2,9 @@
   "network": "Base Sepolia",
   "chainId": 84532,
   "version": "v2",
-  "status": "test-superseded",
+  "status": "test",
   "deployedAt": "2026-11-24",
-  "commit": "8079ad1480c533715ef97f4e3d4147d81a073347",
+  "commit": "694d830af1024e4aa234e1dd52b3139cf6da53ea",
   "branch": "feat/contracts-v2",
   "script": "script/DeployV2.s.sol",
   "compiler": {
@@ -19,7 +19,6 @@
   "feeWallet": "0x6f02e3466AD09B8cDa31a8dae8C12d809ED14c9a",
   "gasTreasury": "0x0d3bd2a7331a9c5aDb1234fA955327905c5C24FC",
   "usdc": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-  "notes": "All role wallets are test-only (p2flux-testkey v2-sepolia-*); relayer is the existing test API relayer (address read on chain from the v1 Sepolia sponsored splitter). Plain CREATE, no CREATE2.",
   "initialRates": {
     "oneTime": {
       "bps": 100,
@@ -46,85 +45,59 @@
   },
   "contracts": {
     "P2FluxFeeRegistry": {
-      "address": "0x7721D8B78F63bBaA124ED674e5D82f6e6029061d",
-      "txHash": "0xaeaf7a5f4af9d975d46b072dd0878da5f27dd4f2420f732fe0c0aa09037aebbf",
-      "block": 62913301,
-      "gasUsed": 1106112,
+      "address": "0xC8358FF6d45272581b8C2D5E38E0AcE1DfdA6031",
+      "txHash": "0x564016e1e9d84783dad1c61d21233549872114c3fab9a4abee345e9c214b514d",
+      "block": 63018197,
       "constructorArgs": {
         "admin": "0x1Aa8bb19484a0C601888F80a3fA0C31bA3EAF825",
         "oneTime(bps,partnerBps,fixedFee)": "(100, 75, 50000)",
         "recurring(bps,partnerBps,fixedFee)": "(150, 125, 50000)",
         "send(bps,partnerBps,fixedFee)": "(10, 10, 50000)"
       },
-      "explorer": "https://sepolia.basescan.org/address/0x7721D8B78F63bBaA124ED674e5D82f6e6029061d",
-      "sourcify": "https://repo.sourcify.dev/84532/0x7721D8B78F63bBaA124ED674e5D82f6e6029061d",
-      "sourcifyMatch": "exact_match"
+      "sourcify": "exact_match"
     },
-    "P2FluxSplitterV2": {
-      "address": "0xb652A0dE66d12D81B5081Bd898066907f27BA632",
-      "txHash": "0xb876c1f64ae674cc3f7981626a7167d3141212dc020294b0c1d15840d1c187a8",
-      "block": 62913303,
-      "gasUsed": 664756,
-      "constructorArgs": {
-        "supportedToken": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-        "feeWallet": "0x6f02e3466AD09B8cDa31a8dae8C12d809ED14c9a",
-        "registry": "0x7721D8B78F63bBaA124ED674e5D82f6e6029061d"
-      },
-      "explorer": "https://sepolia.basescan.org/address/0xb652A0dE66d12D81B5081Bd898066907f27BA632",
-      "sourcify": "https://repo.sourcify.dev/84532/0xb652A0dE66d12D81B5081Bd898066907f27BA632",
-      "sourcifyMatch": "exact_match"
-    },
-    "P2FluxSponsoredSplitterV2": {
-      "address": "0x540E1ee63b9f06d7C22952f628A0695cBF606fC2",
-      "txHash": "0x421117a4e09e87f1a612a123bb47d2544354ca7b5f6c376aadc42c0609b7d1ce",
-      "block": 62913306,
-      "gasUsed": 1029704,
+    "P2FluxPaymentsV2": {
+      "address": "0xEC2fFAa31fb6AE9D2FCD48119C8c5c2c4E1dF780",
+      "txHash": "0xdf11cb05e105a1ea2223e0c01d19d29e61b367ffff267541d37efee0b9989112",
+      "block": 63018199,
       "constructorArgs": {
         "supportedToken": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
         "feeWallet": "0x6f02e3466AD09B8cDa31a8dae8C12d809ED14c9a",
         "gasTreasury": "0x0d3bd2a7331a9c5aDb1234fA955327905c5C24FC",
         "relayer": "0xC6bec1306F4FA2a81e41945f739829DAfD5908EC",
-        "registry": "0x7721D8B78F63bBaA124ED674e5D82f6e6029061d",
+        "registry": "0xC8358FF6d45272581b8C2D5E38E0AcE1DfdA6031",
         "maxNetworkFeeHardCap": "250000"
       },
-      "explorer": "https://sepolia.basescan.org/address/0x540E1ee63b9f06d7C22952f628A0695cBF606fC2",
-      "sourcify": "https://repo.sourcify.dev/84532/0x540E1ee63b9f06d7C22952f628A0695cBF606fC2",
-      "sourcifyMatch": "exact_match"
+      "sourcify": "exact_match"
     },
     "P2FluxRecurringV2": {
-      "address": "0x409e672cBA651B49064Aa4B5516e93dff8304DD7",
-      "txHash": "0xf22171276b08b888a42163d3f307febacb24ce6d16c1545a68f5d1fd54cf835b",
-      "block": 62913308,
-      "gasUsed": 1797652,
+      "address": "0xFBc650689fEA1DbC23113841D8FD0Be4992FacA3",
+      "txHash": "0x54606fe972633dcdcb0695124d24c310b966789e95877bca4d80ca47428876f3",
+      "block": 63018202,
       "constructorArgs": {
         "admin": "0x1Aa8bb19484a0C601888F80a3fA0C31bA3EAF825",
         "relayer": "0xC6bec1306F4FA2a81e41945f739829DAfD5908EC",
         "feeWallet": "0x6f02e3466AD09B8cDa31a8dae8C12d809ED14c9a",
         "gasTreasury": "0x0d3bd2a7331a9c5aDb1234fA955327905c5C24FC",
         "supportedToken": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-        "registry": "0x7721D8B78F63bBaA124ED674e5D82f6e6029061d",
+        "registry": "0xC8358FF6d45272581b8C2D5E38E0AcE1DfdA6031",
         "gasReimbursementHardCap": "50000"
       },
-      "explorer": "https://sepolia.basescan.org/address/0x409e672cBA651B49064Aa4B5516e93dff8304DD7",
-      "sourcify": "https://repo.sourcify.dev/84532/0x409e672cBA651B49064Aa4B5516e93dff8304DD7",
-      "sourcifyMatch": "exact_match"
+      "sourcify": "exact_match"
     },
     "P2FluxSend": {
-      "address": "0xc97eFaf3e8e7c0538441408319c76570e81BbD4A",
-      "txHash": "0xb5ac1ef7d86aeb9e6b34255d356633bc79166c01dc44904680fff3330c1feb21",
-      "block": 62913311,
-      "gasUsed": 1029417,
+      "address": "0x52928B8B5a641eef9912b9101E6094C8180d996f",
+      "txHash": "0x122b4a1a01145c0516f1b192209f4cad5660f49ecc2d2c4097093c8e0c72e73e",
+      "block": 63018204,
       "constructorArgs": {
         "supportedToken": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
         "feeWallet": "0x6f02e3466AD09B8cDa31a8dae8C12d809ED14c9a",
         "gasTreasury": "0x0d3bd2a7331a9c5aDb1234fA955327905c5C24FC",
         "relayer": "0xC6bec1306F4FA2a81e41945f739829DAfD5908EC",
-        "registry": "0x7721D8B78F63bBaA124ED674e5D82f6e6029061d"
+        "registry": "0xC8358FF6d45272581b8C2D5E38E0AcE1DfdA6031"
       },
-      "explorer": "https://sepolia.basescan.org/address/0xc97eFaf3e8e7c0538441408319c76570e81BbD4A",
-      "sourcify": "https://repo.sourcify.dev/84532/0xc97eFaf3e8e7c0538441408319c76570e81BbD4A",
-      "sourcifyMatch": "exact_match"
+      "sourcify": "exact_match"
     }
   },
-  "supersededNote": "Historical record of the 2026-11-24 Base Sepolia test deployment (commit 8079ad1). P2FluxSplitterV2 and P2FluxSponsoredSplitterV2 were merged into P2FluxPaymentsV2 afterwards; a new 4-contract test deployment (registry, payments, recurring, send) follows on owner instruction, with a manifest in the format of manifests/v2.template.json."
+  "supersedes": "manifests/base-sepolia-v2-superseded-8079ad1.json (5-contract test deployment of 8079ad1; splitters since merged into P2FluxPaymentsV2)"
 }
