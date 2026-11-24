@@ -35,10 +35,16 @@ contract P2FluxFeeRegistry {
         uint64 fixedFee;
     }
 
-    /// @dev One storage slot. `next` is effective from `eta` on; `eta == 0` means nothing scheduled.
+    /// @dev Flat on purpose: 16+16+64+16+16+64+64 = 256 bits = ONE storage slot (nested `Rate`
+    ///      structs would each start a new slot). `next*` is effective from `eta` on; `eta == 0`
+    ///      means nothing scheduled.
     struct RateSlot {
-        Rate current;
-        Rate next;
+        uint16 bps;
+        uint16 partnerBps;
+        uint64 fixedFee;
+        uint16 nextBps;
+        uint16 nextPartnerBps;
+        uint64 nextFixedFee;
         uint64 eta;
     }
 
@@ -90,8 +96,9 @@ contract P2FluxFeeRegistry {
 
     /// @notice The rate of `kind` effective right now.
     function rates(Kind kind) public view returns (uint16 bps, uint16 partnerBps, uint64 fixedFee) {
-        Rate memory r = _effective(_rates[kind]);
-        return (r.bps, r.partnerBps, r.fixedFee);
+        RateSlot memory s = _rates[kind];
+        if (s.eta != 0 && block.timestamp >= s.eta) return (s.nextBps, s.nextPartnerBps, s.nextFixedFee);
+        return (s.bps, s.partnerBps, s.fixedFee);
     }
 
     /// @notice Whether `recipient` gets the partner rate right now.
@@ -108,7 +115,7 @@ contract P2FluxFeeRegistry {
     {
         RateSlot memory s = _rates[kind];
         if (s.eta == 0 || block.timestamp >= s.eta) return (0, 0, 0, 0);
-        return (s.next.bps, s.next.partnerBps, s.next.fixedFee, s.eta);
+        return (s.nextBps, s.nextPartnerBps, s.nextFixedFee, s.eta);
     }
 
     /// @notice The partner flag scheduled for `recipient` and when it takes effect (0 = none).
@@ -130,19 +137,17 @@ contract P2FluxFeeRegistry {
     ///         the clock.
     function scheduleRate(Kind kind, Rate calldata rate) external onlyAdmin {
         _check(rate);
-        RateSlot storage s = _rates[kind];
-        s.current = _effective(s);
-        s.next = rate;
-        s.eta = uint64(block.timestamp + DELAY);
-        emit RateScheduled(kind, rate.bps, rate.partnerBps, rate.fixedFee, s.eta);
+        (uint16 b, uint16 pb, uint64 f) = rates(kind); // keep whatever is already effective
+        uint64 eta = uint64(block.timestamp + DELAY);
+        _rates[kind] = RateSlot(b, pb, f, rate.bps, rate.partnerBps, rate.fixedFee, eta);
+        emit RateScheduled(kind, rate.bps, rate.partnerBps, rate.fixedFee, eta);
     }
 
     /// @notice Cancel a scheduled rate before it takes effect. After that, schedule the old one back.
     function cancelRate(Kind kind) external onlyAdmin {
-        RateSlot storage s = _rates[kind];
+        RateSlot memory s = _rates[kind];
         if (s.eta == 0 || block.timestamp >= s.eta) revert NothingPending();
-        delete s.next;
-        s.eta = 0;
+        _rates[kind] = RateSlot(s.bps, s.partnerBps, s.fixedFee, 0, 0, 0, 0);
         emit RateCancelled(kind);
     }
 
@@ -168,17 +173,13 @@ contract P2FluxFeeRegistry {
 
     // --- internals -----------------------------------------------------------
 
-    function _effective(RateSlot memory s) private view returns (Rate memory) {
-        return s.eta != 0 && block.timestamp >= s.eta ? s.next : s.current;
-    }
-
     function _check(Rate memory r) private pure {
         if (r.bps > MAX_BPS || r.partnerBps > r.bps || r.fixedFee > MAX_FIXED_FEE) revert RateAboveCap();
     }
 
     function _init(Kind kind, Rate memory r) private {
         _check(r);
-        _rates[kind].current = r;
+        _rates[kind] = RateSlot(r.bps, r.partnerBps, r.fixedFee, 0, 0, 0, 0);
         emit RateScheduled(kind, r.bps, r.partnerBps, r.fixedFee, block.timestamp);
     }
 }

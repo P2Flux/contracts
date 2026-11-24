@@ -294,10 +294,14 @@ initializer after deployment, which adds a front-running and misconfiguration ri
 
 | Call | v1 | v2 |
 |---|---|---|
-| Sponsored one-time | 187.6k | 202.2k (+14.6k: registry reads + cap re-check + partner lookup) |
-| Recurring charge (relayer) | 168.9k | 183.6k (+14.7k) |
-| Send direct | - | 102.8k |
-| Send relayed | - | 173.9k |
+| Sponsored one-time | 187.6k | 197.8k (+10.2k: registry reads + cap re-check + partner lookup) |
+| Recurring charge (relayer) | 168.9k | 179.3k (+10.4k) |
+| Send direct | - | 98.3k |
+| Send relayed | - | 169.4k |
+
+`RateSlot` is flat (7 fields, 256 bits) so a rate read is one storage slot (checked with
+`forge inspect P2FluxFeeRegistry storageLayout`: 32 bytes, was 96); this saved about 4.4-4.7k gas per
+payment (N-03).
 
 ## 10. Migration
 
@@ -374,6 +378,16 @@ These are not enforced (or not fully enforceable) on chain; the API, relayer and
   blacklisted fee wallet stops every path that takes a fee: same steps, redeploying everything but
   the registry. Keep fee wallet and gas treasury clean, separate, single-purpose addresses.
 - **R-08:** instant `setRelayer` is kept for incident response (see §6).
+- **N-01: simulate before sending a charge.** `charge` is public, so anyone can run a due charge
+  before the relayer (the 0.05 fixed fee is then skipped, by the R-04 rule). The relayer's own
+  transaction would then revert `AlreadyChargedThisPeriod` and waste gas. The scheduler simulates
+  every charge (`eth_call`, or reads `lastChargedPeriodPlusOne`) right before sending, and does not
+  send if it would revert.
+- **N-02: a false `isChargeable` is not a dead subscription.** `isChargeable` is a relayer view: it
+  counts the fixed fee. For an amount between `fee` and `fee + fixed` it returns false, yet a
+  non-relayer can still charge (without the fixed fee). The scheduler must not mark such a
+  subscription cancelled or expired: it skips the relayer charge, tells the merchant (raise the price
+  or let the payer re-sign), and keeps the subscription's state unchanged.
 
 Changes made in response to the review (commit after `a9894a6`): R-01 `InvalidRecipient` everywhere;
 R-02 caps re-checked in `P2FluxV2Base._rate`, registry sanity read at construction, `minimumAmount`
