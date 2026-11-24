@@ -301,8 +301,8 @@ initializer after deployment, which adds a front-running and misconfiguration ri
 
 | Call | v1 | v2 |
 |---|---|---|
-| Sponsored one-time (`payWithAuthorization`) | 187.6k | 198.0k (+10.4k: registry reads + cap re-check + partner lookup) |
-| Self-pay one-time (`pay`, fuzz average incl. cold accounts) | - | 123.5k |
+| Sponsored one-time (`payWithAuthorization`) | 187.6k | 197.2k (+9.6k: registry reads + cap re-check + partner lookup) |
+| Self-pay one-time (`pay`, fuzz average incl. cold accounts) | - | 126.2k |
 | Recurring charge (relayer) | 168.9k | 179.3k (+10.4k) |
 | Send direct | - | 98.3k |
 | Send relayed | - | 169.4k |
@@ -342,8 +342,12 @@ payment (N-03).
 - Watchdog: alert on `RateScheduled`, `RateCancelled`, `PartnerScheduled`, `RelayerChanged`.
 - Multi-chain: per-chain contract sets, relayers, gas caps, RPCs; chain id in every quote.
 - Contract allow-list in checkout and self-hosted checkout: add v2 addresses, keep v1.
-- Events: `Paid` and `SponsoredPaid` keep their v1 shapes; `SubscriptionCharged.networkFee` now
-  carries the registry fixed fee; new `Sent` event.
+- Events: `P2FluxPaymentsV2` emits ONE event for both entrances, `PaymentSettled(id indexed, ref
+  indexed, recipient indexed, payer, amount, fee, fixedFee, gasReimbursement, entrance)` (U-02; payer
+  is the real buyer; recipient net = `amount - fee - fixedFee`; `entrance` 0 = self-pay,
+  1 = sponsored). It replaces v1's `Paid` / `SponsoredPaid` / `PaymentSettled(id)`, so the indexer
+  needs a v2 decoder. `SubscriptionCharged.networkFee` now carries the registry fixed fee; new `Sent`
+  event.
 - ABIs and `dist/` entries for the v2 contracts; manifest scripts and manifest tests for v2; SDK
   backward compatibility test (old SDKs must keep working against v1).
 - Changes feed / docs / terms with the new prices and the 48 h fee-change notice.
@@ -375,6 +379,22 @@ These are not enforced (or not fully enforceable) on chain; the API, relayer and
   through; before showing a pay button, accepting a payment or offering a refund it checks
   `isPaymentProcessed` on **all** splitter contracts (v1 and v2) for that id, and treats a second
   settlement as a duplicate to refund off chain.
+- **U-01: an order is its payment id, never its bare reference (hard API / indexer rules).** On
+  chain an order is keyed by the full terms `paymentId(token, recipient, amount, ref)`; that is what
+  stops anyone from blocking an order by paying 1 unit with its reference, so it stays. The price is
+  that a `ref` is not unique on chain: the same ref can settle again with another amount or recipient,
+  through either entrance or on v1. Therefore:
+  1. The API stores each order's exact recipient, amount and reference, and never re-quotes under
+     the same reference (a new price = a new reference). The amount in the key is the merchant amount;
+     the buyer's gas reimbursement is separate and not part of it.
+  2. An order is marked paid **only** when a `PaymentSettled` event's `id` equals the stored payment
+     id (or `isPaymentProcessed(token, recipient, amount, ref)` is true for the stored terms). A
+     matching `ref` alone is never proof of payment.
+  3. Before offering any entrance (self-pay, sponsored, or `auto`), check `isPaymentProcessed` on
+     `P2FluxPaymentsV2` AND on the v1 splitter and v1 sponsored splitter of that chain.
+  4. Any other settlement carrying the same reference (different id: other amount, recipient,
+     contract or version) is reported to the merchant as an unrelated or duplicate payment, for a
+     refund. It never marks the order paid and never counts towards it.
 - **R-07: relayer policy for Send.** A relayed send is a cheap, gasless, ref-tagged rail (0.1% + 0.05
   vs 1% + 0.05 for a sponsored payment), and the contract cannot tell a gift from a sale. The relayer
   refuses relayed sends to known merchant wallets (registered recipients, payment-link wallets),

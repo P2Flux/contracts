@@ -58,17 +58,27 @@ contract P2FluxPaymentsV2 is P2FluxV2Base, ReentrancyGuard {
         uint256 validBefore;
     }
 
-    event Paid(bytes32 indexed ref, address indexed recipient, address indexed token, uint256 net, uint256 fee);
-    event SponsoredPaid(
+    /// @notice `entrance` values of `PaymentSettled`.
+    uint8 public constant ENTRANCE_SELF_PAY = 0;
+    uint8 public constant ENTRANCE_SPONSORED = 1;
+
+    /// @notice The one settlement event, for both entrances. An order is paid only when `id` equals
+    ///         the order's stored `paymentId` (a bare `ref` match is NOT proof: see design §13, U-01).
+    /// @param payer The real buyer: msg.sender for self-pay, the EIP-3009 authorizer for sponsored.
+    /// @param amount The order amount (merchant price). Recipient got `amount - fee - fixedFee`.
+    /// @param fixedFee 0 on self-pay.
+    /// @param gasReimbursement The buyer's signed network fee to the gas treasury (0 on self-pay).
+    event PaymentSettled(
+        bytes32 indexed id,
         bytes32 indexed ref,
         address indexed recipient,
-        address indexed payer,
-        uint256 net,
+        address payer,
+        uint256 amount,
         uint256 fee,
-        uint256 networkFee,
-        uint256 fixedNetworkFee
+        uint256 fixedFee,
+        uint256 gasReimbursement,
+        uint8 entrance
     );
-    event PaymentSettled(bytes32 indexed paymentId);
 
     error ZeroAmount();
     error AmountTooSmall();
@@ -162,8 +172,7 @@ contract P2FluxPaymentsV2 is P2FluxV2Base, ReentrancyGuard {
         if (token != supportedToken) revert TokenNotSupported();
         (bytes32 id, uint256 fee,) = _open(recipient, amount, ref, false);
         _payOut(msg.sender, recipient, amount - fee, fee, 0);
-        emit Paid(ref, recipient, token, amount - fee, fee);
-        emit PaymentSettled(id);
+        emit PaymentSettled(id, ref, recipient, msg.sender, amount, fee, 0, 0, ENTRANCE_SELF_PAY);
     }
 
     // --- entrance 2: sponsored -----------------------------------------------
@@ -185,8 +194,7 @@ contract P2FluxPaymentsV2 is P2FluxV2Base, ReentrancyGuard {
         _payOut(address(this), p.recipient, p.amount - fee - fixedFee, fee, fixedFee + p.networkFee);
         if (IERC20(supportedToken).balanceOf(address(this)) != heldBefore) revert ResidualBalance();
 
-        emit SponsoredPaid(p.ref, p.recipient, p.payer, p.amount - fee - fixedFee, fee, p.networkFee, fixedFee);
-        emit PaymentSettled(id);
+        emit PaymentSettled(id, p.ref, p.recipient, p.payer, p.amount, fee, fixedFee, p.networkFee, ENTRANCE_SPONSORED);
     }
 
     // --- shared --------------------------------------------------------------

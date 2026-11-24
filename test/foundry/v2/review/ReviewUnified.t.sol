@@ -59,7 +59,8 @@ contract ReviewUnifiedTest is ReviewBase {
     // either entrance, and every settlement emits an event carrying that ref.
     // ---------------------------------------------------------------------------------------------
 
-    /// A buyer "pays" their own 100 USDC order with 1 base unit: a valid Paid(ref = order) event.
+    /// A buyer "pays" their own 100 USDC order with 1 base unit: a valid PaymentSettled carrying the
+    /// order's ref, but with an id that is NOT the order's payment id (API rule, design §13 U-01).
     function test_U01_underpaymentWithOrderRefEmitsPaid() public {
         bytes32 ref = bytes32("order-77");
         vm.recordLogs();
@@ -68,9 +69,12 @@ contract ReviewUnifiedTest is ReviewBase {
         Vm.Log[] memory logs = vm.getRecordedLogs();
         bool seen;
         for (uint256 i; i < logs.length; i++) {
-            if (logs[i].topics[0] == Payments.Paid.selector && logs[i].topics[1] == ref) seen = true;
+            if (logs[i].topics[0] == Payments.PaymentSettled.selector && logs[i].topics[2] == ref) {
+                seen = true;
+                assertTrue(logs[i].topics[1] != pm.paymentId(address(token), merchant, 100e6, ref), "id != order id");
+            }
         }
-        assertTrue(seen, "Paid event with the order's ref");
+        assertTrue(seen, "settlement event with the order's ref");
         assertFalse(pm.isPaymentProcessed(address(token), merchant, 100e6, ref), "the real order is NOT paid");
         assertEq(token.balanceOf(merchant), 1, "merchant got 1 base unit");
     }
@@ -96,33 +100,40 @@ contract ReviewUnifiedTest is ReviewBase {
     }
 
     // ---------------------------------------------------------------------------------------------
-    // U-02 (Info): the two entrances emit different event shapes; the self-pay `Paid` has no payer.
+    // U-02 (fixed): ONE settlement event for both entrances, with the real payer.
     // ---------------------------------------------------------------------------------------------
 
-    function test_U02_eventShapes() public {
+    function test_U02_oneEventShapeWithPayer() public {
         vm.recordLogs();
         vm.prank(payer);
         pm.pay(address(token), merchant, 10e6, bytes32("a"));
         _sponsor(merchant, 10e6, bytes32("b"), 0.01e6);
         Vm.Log[] memory logs = vm.getRecordedLogs();
-        uint256 paid;
-        uint256 sp;
         uint256 settled;
         for (uint256 i; i < logs.length; i++) {
-            bytes32 t = logs[i].topics[0];
             if (logs[i].emitter != address(pm)) continue;
-            if (t == Payments.Paid.selector) {
-                paid++;
-                // topics: ref, recipient, token. No payer anywhere in the event.
-                assertEq(logs[i].topics.length, 4);
-                assertEq(address(uint160(uint256(logs[i].topics[3]))), address(token));
+            assertEq(logs[i].topics[0], Payments.PaymentSettled.selector, "the only event the contract emits");
+            assertEq(address(uint160(uint256(logs[i].topics[3]))), merchant);
+            (address who, uint256 amount, uint256 fee, uint256 fixedFee, uint256 gas, uint8 entrance) =
+                abi.decode(logs[i].data, (address, uint256, uint256, uint256, uint256, uint8));
+            assertEq(who, payer, "real buyer on both entrances");
+            assertEq(amount, 10e6);
+            assertEq(fee, 0.1e6);
+            if (settled == 0) {
+                assertEq(logs[i].topics[2], bytes32("a"));
+                assertEq(logs[i].topics[1], pm.paymentId(address(token), merchant, 10e6, bytes32("a")));
+                assertEq(entrance, pm.ENTRANCE_SELF_PAY());
+                assertEq(fixedFee, 0);
+                assertEq(gas, 0);
+            } else {
+                assertEq(logs[i].topics[2], bytes32("b"));
+                assertEq(entrance, pm.ENTRANCE_SPONSORED());
+                assertEq(fixedFee, 0.05e6);
+                assertEq(gas, 0.01e6);
             }
-            if (t == Payments.SponsoredPaid.selector) sp++;
-            if (t == Payments.PaymentSettled.selector) settled++;
+            settled++;
         }
-        assertEq(paid, 1);
-        assertEq(sp, 1);
-        assertEq(settled, 2, "PaymentSettled(id) is the one shape common to both entrances");
+        assertEq(settled, 2);
     }
 
     // ---------------------------------------------------------------------------------------------
