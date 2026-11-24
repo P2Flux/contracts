@@ -4,18 +4,18 @@ pragma solidity 0.8.26;
 import {ReviewBase} from "./ReviewBase.sol";
 import {MockUSDC, ReentrantToken, IRecurringLike} from "../../../../contracts/test/MockTokens.sol";
 import {P2FluxFeeRegistry} from "../../../../contracts/v2/P2FluxFeeRegistry.sol";
-import {P2FluxSplitterV2} from "../../../../contracts/v2/P2FluxSplitterV2.sol";
-import {P2FluxSponsoredSplitterV2 as Sponsored} from "../../../../contracts/v2/P2FluxSponsoredSplitterV2.sol";
+import {P2FluxPaymentsV2} from "../../../../contracts/v2/P2FluxPaymentsV2.sol";
+import {P2FluxPaymentsV2 as Sponsored} from "../../../../contracts/v2/P2FluxPaymentsV2.sol";
 import {P2FluxRecurringV2 as Recurring} from "../../../../contracts/v2/P2FluxRecurringV2.sol";
 import {P2FluxSend} from "../../../../contracts/v2/P2FluxSend.sol";
 
 /// @notice A 6-decimal token that re-enters the splitter with the SAME payment terms mid-transfer.
 contract ReenterPayToken is MockUSDC {
-    P2FluxSplitterV2 public target;
+    P2FluxPaymentsV2 public target;
     address public recipient;
     bool public armed;
 
-    function arm(P2FluxSplitterV2 t, address r) external {
+    function arm(P2FluxPaymentsV2 t, address r) external {
         target = t;
         recipient = r;
         armed = true;
@@ -290,15 +290,16 @@ contract ReviewChecksTest is ReviewBase {
 
     function test_C14_reentrancyThroughToken() public {
         ReenterPayToken t = new ReenterPayToken();
-        P2FluxSplitterV2 s2 = new P2FluxSplitterV2(address(t), feeWallet, address(registry));
+        P2FluxPaymentsV2 s2 =
+            new P2FluxPaymentsV2(address(t), feeWallet, gasTreasury, relayer, address(registry), NETWORK_CAP);
         t.mint(payer, 300e6);
         vm.prank(payer);
         t.approve(address(s2), type(uint256).max);
         t.arm(s2, merchant);
-        // The inner call hits the replay table the outer call already wrote (effects before interactions).
-        bytes32 id = s2.paymentId(address(t), merchant, 100e6, bytes32("same"));
+        // The inner call is stopped by the reentrancy guard (both entrances are nonReentrant now);
+        // the replay table, written before any transfer, would refuse it as well.
         vm.prank(payer);
-        vm.expectRevert(abi.encodeWithSelector(P2FluxSplitterV2.PaymentAlreadyProcessed.selector, id));
+        vm.expectRevert(bytes4(keccak256("ReentrancyGuardReentrantCall()")));
         s2.pay(address(t), merchant, 100e6, bytes32("same"));
 
         ReentrantToken rt = new ReentrantToken();

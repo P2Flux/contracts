@@ -3,15 +3,15 @@ pragma solidity 0.8.26;
 
 import {V2Test} from "../V2Helpers.sol";
 import {P2FluxFeeRegistry} from "../../../../contracts/v2/P2FluxFeeRegistry.sol";
-import {P2FluxSplitterV2} from "../../../../contracts/v2/P2FluxSplitterV2.sol";
-import {P2FluxSponsoredSplitterV2 as Sponsored} from "../../../../contracts/v2/P2FluxSponsoredSplitterV2.sol";
+import {P2FluxPaymentsV2} from "../../../../contracts/v2/P2FluxPaymentsV2.sol";
+import {P2FluxPaymentsV2 as Sponsored} from "../../../../contracts/v2/P2FluxPaymentsV2.sol";
 import {P2FluxRecurringV2 as Recurring} from "../../../../contracts/v2/P2FluxRecurringV2.sol";
 import {P2FluxSend} from "../../../../contracts/v2/P2FluxSend.sol";
 
 /// @notice Review fixture (internal review 2026-11-24): the full v2 set on the mock FiatToken, at
 ///         the owner-agreed prices, plus signing helpers for every relayed path.
 abstract contract ReviewBase is V2Test {
-    P2FluxSplitterV2 internal splitter;
+    P2FluxPaymentsV2 internal splitter;
     Sponsored internal sponsored;
     Recurring internal recurring;
     P2FluxSend internal sender;
@@ -21,8 +21,9 @@ abstract contract ReviewBase is V2Test {
 
     function _reviewSetUp() internal {
         _v2SetUp();
-        splitter = new P2FluxSplitterV2(address(token), feeWallet, address(registry));
+        // One payments contract; `splitter` = its self-pay entrance, `sponsored` = its sponsored one.
         sponsored = new Sponsored(address(token), feeWallet, gasTreasury, relayer, address(registry), NETWORK_CAP);
+        splitter = sponsored;
         recurring = new Recurring(admin, relayer, feeWallet, gasTreasury, address(token), address(registry), GAS_CAP);
         sender = new P2FluxSend(address(token), feeWallet, gasTreasury, relayer, address(registry));
     }

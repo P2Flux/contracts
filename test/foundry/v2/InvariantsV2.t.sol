@@ -5,8 +5,8 @@ import {Test} from "forge-std/Test.sol";
 import {V2Test} from "./V2Helpers.sol";
 import {MockFiatToken} from "../../../contracts/test/MockTokens.sol";
 import {P2FluxFeeRegistry} from "../../../contracts/v2/P2FluxFeeRegistry.sol";
-import {P2FluxSplitterV2} from "../../../contracts/v2/P2FluxSplitterV2.sol";
-import {P2FluxSponsoredSplitterV2 as Sponsored} from "../../../contracts/v2/P2FluxSponsoredSplitterV2.sol";
+import {P2FluxPaymentsV2} from "../../../contracts/v2/P2FluxPaymentsV2.sol";
+import {P2FluxPaymentsV2 as Sponsored} from "../../../contracts/v2/P2FluxPaymentsV2.sol";
 import {P2FluxRecurringV2 as Recurring} from "../../../contracts/v2/P2FluxRecurringV2.sol";
 import {P2FluxSend} from "../../../contracts/v2/P2FluxSend.sol";
 
@@ -15,7 +15,9 @@ import {P2FluxSend} from "../../../contracts/v2/P2FluxSend.sol";
 contract V2Handler is Test {
     MockFiatToken token;
     P2FluxFeeRegistry registry;
-    P2FluxSplitterV2 splitter;
+    // Both names point at the ONE payments contract: `splitter` = self-pay entrance, `sponsored` =
+    // sponsored entrance.
+    P2FluxPaymentsV2 splitter;
     Sponsored sponsored;
     Recurring recurring;
     P2FluxSend sender;
@@ -35,7 +37,7 @@ contract V2Handler is Test {
     constructor(
         MockFiatToken _token,
         P2FluxFeeRegistry _registry,
-        P2FluxSplitterV2 _splitter,
+        P2FluxPaymentsV2 _splitter,
         Sponsored _sponsored,
         Recurring _recurring,
         P2FluxSend _sender,
@@ -98,6 +100,70 @@ contract V2Handler is Test {
         vm.prank(relayer);
         sponsored.payWithAuthorization(p, v, rr, s);
         _book(amount + networkFee, amount - fee - fixedFee, fee, fixedFee + networkFee);
+    }
+
+    // --- shared orders: a small pool of identical orders, hit through either entrance ---------------
+    uint256 constant ORDERS = 5;
+    uint256 constant ORDER_AMOUNT = 10e6;
+    mapping(uint256 => uint256) public settledCount; // order index => successful settlements
+    uint256 public crossAttempts;
+
+    /// Try to settle order `i` (same recipient, amount and ref every time) via self-pay or sponsored.
+    function settleSharedOrder(uint256 i, bool viaSponsored, uint256 networkFee) external {
+        i %= ORDERS;
+        bytes32 ref = keccak256(abi.encode("order", i));
+        address r = recipients[0];
+        (uint256 bps, uint256 fixedFee) = _bps(P2FluxFeeRegistry.Kind.OneTime, r);
+        uint256 fee = ORDER_AMOUNT * bps / 10_000;
+        crossAttempts++;
+        if (viaSponsored) {
+            networkFee = bound(networkFee, 0, sponsored.MAX_NETWORK_FEE_HARD_CAP());
+            Sponsored.SponsoredPayment memory p =
+                Sponsored.SponsoredPayment(payer, r, ORDER_AMOUNT, ref, networkFee, block.timestamp + 60);
+            (uint8 v, bytes32 rr, bytes32 s) = _signReceive(
+                address(sponsored), ORDER_AMOUNT + networkFee, p.validBefore, sponsored.authorizationNonce(p)
+            );
+            token.mint(payer, ORDER_AMOUNT + networkFee);
+            vm.prank(relayer);
+            try sponsored.payWithAuthorization(p, v, rr, s) {
+                settledCount[i]++;
+                _book(ORDER_AMOUNT + networkFee, ORDER_AMOUNT - fee - fixedFee, fee, fixedFee + networkFee);
+            } catch {
+                _burnUnspent(ORDER_AMOUNT + networkFee);
+            }
+        } else {
+            token.mint(payer, ORDER_AMOUNT);
+            vm.prank(payer);
+            try splitter.pay(address(token), r, ORDER_AMOUNT, ref) {
+                settledCount[i]++;
+                _book(ORDER_AMOUNT, ORDER_AMOUNT - fee, fee, 0);
+            } catch {
+                _burnUnspent(ORDER_AMOUNT);
+            }
+        }
+    }
+
+    /// @dev A refused attempt moved nothing; drop the minted test funds so `payer` ends at zero.
+    function _burnUnspent(uint256 value) internal {
+        vm.prank(payer);
+        token.transfer(address(0xdead), value);
+    }
+
+    function maxSettled() external view returns (uint256 m) {
+        for (uint256 i; i < ORDERS; i++) {
+            if (settledCount[i] > m) m = settledCount[i];
+        }
+    }
+
+    function processedMatches() external view returns (bool) {
+        for (uint256 i; i < ORDERS; i++) {
+            bytes32 ref = keccak256(abi.encode("order", i));
+            if (splitter.isPaymentProcessed(address(token), recipients[0], ORDER_AMOUNT, ref) != (settledCount[i] == 1))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     function sendDirect(uint256 amount, uint256 who) external {
@@ -169,20 +235,18 @@ contract V2Handler is Test {
 
 contract V2InvariantTest is V2Test {
     V2Handler internal handler;
-    P2FluxSplitterV2 internal splitter;
-    Sponsored internal sponsored;
+    P2FluxPaymentsV2 internal payments;
     Recurring internal recurring;
     P2FluxSend internal sender;
     address internal merchant = address(0xAE2C4A47);
 
     function setUp() public {
         _v2SetUp();
-        splitter = new P2FluxSplitterV2(address(token), feeWallet, address(registry));
-        sponsored = new Sponsored(address(token), feeWallet, gasTreasury, relayer, address(registry), NETWORK_CAP);
+        payments = new P2FluxPaymentsV2(address(token), feeWallet, gasTreasury, relayer, address(registry), NETWORK_CAP);
         recurring = new Recurring(admin, relayer, feeWallet, gasTreasury, address(token), address(registry), 50_000);
         sender = new P2FluxSend(address(token), feeWallet, gasTreasury, relayer, address(registry));
         handler =
-            new V2Handler(token, registry, splitter, sponsored, recurring, sender, admin, relayer, merchant, partner);
+            new V2Handler(token, registry, payments, payments, recurring, sender, admin, relayer, merchant, partner);
         targetContract(address(handler));
     }
 
@@ -202,8 +266,7 @@ contract V2InvariantTest is V2Test {
 
     /// No contract ever keeps a balance.
     function invariant_noCustody() public view {
-        assertEq(token.balanceOf(address(splitter)), 0);
-        assertEq(token.balanceOf(address(sponsored)), 0);
+        assertEq(token.balanceOf(address(payments)), 0);
         assertEq(token.balanceOf(address(recurring)), 0);
         assertEq(token.balanceOf(address(sender)), 0);
     }
@@ -216,5 +279,11 @@ contract V2InvariantTest is V2Test {
             assertLe(pb, b);
             assertLe(f, registry.MAX_FIXED_FEE());
         }
+    }
+
+    /// An order settles at most once across BOTH entrances, and the shared table says exactly which.
+    function invariant_orderSettlesAtMostOnceAcrossEntrances() public view {
+        assertLe(handler.maxSettled(), 1);
+        assertTrue(handler.processedMatches());
     }
 }

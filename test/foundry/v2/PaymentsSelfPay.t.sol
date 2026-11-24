@@ -2,7 +2,7 @@
 pragma solidity 0.8.26;
 
 import {V2Test} from "./V2Helpers.sol";
-import {P2FluxSplitterV2} from "../../../contracts/v2/P2FluxSplitterV2.sol";
+import {P2FluxPaymentsV2} from "../../../contracts/v2/P2FluxPaymentsV2.sol";
 import {P2FluxV2Base} from "../../../contracts/v2/P2FluxV2Base.sol";
 import {P2FluxFeeRegistry} from "../../../contracts/v2/P2FluxFeeRegistry.sol";
 import {FalseReturnToken} from "../../../contracts/test/MockTokens.sol";
@@ -11,12 +11,13 @@ contract EighteenDecimals {
     uint8 public constant decimals = 18;
 }
 
-contract SplitterV2Test is V2Test {
-    P2FluxSplitterV2 internal splitter;
+/// @notice P2FluxPaymentsV2, entrance 1 (self-pay: buyer pays gas, no fixed fee).
+contract PaymentsSelfPayTest is V2Test {
+    P2FluxPaymentsV2 internal splitter;
 
     function setUp() public {
         _v2SetUp();
-        splitter = new P2FluxSplitterV2(address(token), feeWallet, address(registry));
+        splitter = new P2FluxPaymentsV2(address(token), feeWallet, gasTreasury, relayer, address(registry), NETWORK_CAP);
         vm.prank(payer);
         token.approve(address(splitter), type(uint256).max);
     }
@@ -74,37 +75,37 @@ contract SplitterV2Test is V2Test {
         bytes32 id = splitter.paymentId(address(token), makeAddr("m"), 1e6, "a");
         assertTrue(splitter.isPaymentProcessed(address(token), makeAddr("m"), 1e6, "a"));
         vm.prank(payer);
-        vm.expectRevert(abi.encodeWithSelector(P2FluxSplitterV2.PaymentAlreadyProcessed.selector, id));
+        vm.expectRevert(abi.encodeWithSelector(P2FluxPaymentsV2.PaymentAlreadyProcessed.selector, id));
         splitter.pay(address(token), makeAddr("m"), 1e6, "a");
     }
 
     function test_guards() public {
         vm.startPrank(payer);
-        vm.expectRevert(P2FluxSplitterV2.TokenNotSupported.selector);
+        vm.expectRevert(P2FluxPaymentsV2.TokenNotSupported.selector);
         splitter.pay(address(0xBEEF), makeAddr("m"), 1e6, "a");
         vm.expectRevert(P2FluxV2Base.ZeroAddress.selector);
         splitter.pay(address(token), address(0), 1e6, "a");
-        vm.expectRevert(P2FluxSplitterV2.ZeroAmount.selector);
+        vm.expectRevert(P2FluxPaymentsV2.ZeroAmount.selector);
         splitter.pay(address(token), makeAddr("m"), 0, "a");
-        vm.expectRevert(P2FluxSplitterV2.TokenNotSupported.selector);
+        vm.expectRevert(P2FluxPaymentsV2.TokenNotSupported.selector);
         splitter.payWithPermit(address(0xBEEF), makeAddr("m"), 1e6, "a", 0, 0, 0, 0);
         vm.stopPrank();
     }
 
     function test_constructorGuards() public {
         vm.expectRevert(P2FluxV2Base.ZeroAddress.selector);
-        new P2FluxSplitterV2(address(0), feeWallet, address(registry));
+        new P2FluxPaymentsV2(address(0), feeWallet, gasTreasury, relayer, address(registry), NETWORK_CAP);
         vm.expectRevert(P2FluxV2Base.ZeroAddress.selector);
-        new P2FluxSplitterV2(address(token), address(0), address(registry));
+        new P2FluxPaymentsV2(address(token), address(0), gasTreasury, relayer, address(registry), NETWORK_CAP);
         vm.expectRevert(P2FluxV2Base.ZeroAddress.selector);
-        new P2FluxSplitterV2(address(token), feeWallet, address(0));
+        new P2FluxPaymentsV2(address(token), feeWallet, gasTreasury, relayer, address(0), NETWORK_CAP);
         vm.expectRevert(P2FluxV2Base.NotAContract.selector);
-        new P2FluxSplitterV2(address(0xBEEF), feeWallet, address(registry));
+        new P2FluxPaymentsV2(address(0xBEEF), feeWallet, gasTreasury, relayer, address(registry), NETWORK_CAP);
         vm.expectRevert(P2FluxV2Base.NotAContract.selector);
-        new P2FluxSplitterV2(address(token), feeWallet, address(0xBEEF));
+        new P2FluxPaymentsV2(address(token), feeWallet, gasTreasury, relayer, address(0xBEEF), NETWORK_CAP);
         address wrong = address(new EighteenDecimals());
         vm.expectRevert(P2FluxV2Base.WrongDecimals.selector);
-        new P2FluxSplitterV2(wrong, feeWallet, address(registry));
+        new P2FluxPaymentsV2(wrong, feeWallet, gasTreasury, relayer, address(registry), NETWORK_CAP);
     }
 
     function test_payWithPermit() public {
@@ -120,7 +121,8 @@ contract SplitterV2Test is V2Test {
     /// A token that returns false must not count as paid.
     function test_falseReturnTokenFails() public {
         FalseReturnToken t = new FalseReturnToken();
-        P2FluxSplitterV2 s2 = new P2FluxSplitterV2(address(t), feeWallet, address(registry));
+        P2FluxPaymentsV2 s2 =
+            new P2FluxPaymentsV2(address(t), feeWallet, gasTreasury, relayer, address(registry), NETWORK_CAP);
         t.mint(payer, 1e6);
         vm.prank(payer);
         t.approve(address(s2), 1e6);

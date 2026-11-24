@@ -2,11 +2,12 @@
 pragma solidity 0.8.26;
 
 import {V2Test, OverpayToken} from "./V2Helpers.sol";
-import {P2FluxSponsoredSplitterV2 as Sponsored} from "../../../contracts/v2/P2FluxSponsoredSplitterV2.sol";
+import {P2FluxPaymentsV2 as Sponsored} from "../../../contracts/v2/P2FluxPaymentsV2.sol";
 import {P2FluxV2Base} from "../../../contracts/v2/P2FluxV2Base.sol";
 import {P2FluxFeeRegistry} from "../../../contracts/v2/P2FluxFeeRegistry.sol";
 
-contract SponsoredSplitterV2Test is V2Test {
+/// @notice P2FluxPaymentsV2, entrance 2 (sponsored, relayer-only).
+contract PaymentsSponsoredTest is V2Test {
     Sponsored internal splitter;
 
     function setUp() public {

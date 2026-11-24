@@ -1,0 +1,98 @@
+{
+  "network": "<network name>",
+  "chainId": 0,
+  "version": "v2",
+  "status": "<test|live|legacy-accepting|retired>",
+  "deployedAt": "<YYYY-MM-DD>",
+  "commit": "<git sha>",
+  "branch": "<branch>",
+  "script": "script/DeployV2.s.sol",
+  "compiler": {
+    "solc": "0.8.26",
+    "evmVersion": "cancun",
+    "optimizer": true,
+    "runs": 200
+  },
+  "deployer": "<address>",
+  "admin": "<multisig or cold address>",
+  "relayer": "<address>",
+  "feeWallet": "<address>",
+  "gasTreasury": "<address>",
+  "usdc": "<native USDC address>",
+  "initialRates": {
+    "oneTime": {
+      "bps": 100,
+      "partnerBps": 75,
+      "fixedFee": 50000
+    },
+    "recurring": {
+      "bps": 150,
+      "partnerBps": 125,
+      "fixedFee": 50000
+    },
+    "send": {
+      "bps": 10,
+      "partnerBps": 10,
+      "fixedFee": 50000
+    }
+  },
+  "caps": {
+    "maxBps": 200,
+    "maxFixedFee": 200000,
+    "delaySeconds": 172800,
+    "maxNetworkFeeHardCap": 250000,
+    "gasReimbursementHardCap": 50000
+  },
+  "contracts": {
+    "P2FluxFeeRegistry": {
+      "address": "<address>",
+      "txHash": "<hash>",
+      "block": 0,
+      "constructorArgs": {
+        "admin": "<address>",
+        "oneTime(bps,partnerBps,fixedFee)": "(100, 75, 50000)",
+        "recurring(bps,partnerBps,fixedFee)": "(150, 125, 50000)",
+        "send(bps,partnerBps,fixedFee)": "(10, 10, 50000)"
+      }
+    },
+    "P2FluxPaymentsV2": {
+      "address": "<address>",
+      "txHash": "<hash>",
+      "block": 0,
+      "constructorArgs": {
+        "supportedToken": "<usdc>",
+        "feeWallet": "<address>",
+        "gasTreasury": "<address>",
+        "relayer": "<address>",
+        "registry": "<registry>",
+        "maxNetworkFeeHardCap": "250000"
+      }
+    },
+    "P2FluxRecurringV2": {
+      "address": "<address>",
+      "txHash": "<hash>",
+      "block": 0,
+      "constructorArgs": {
+        "admin": "<address>",
+        "relayer": "<address>",
+        "feeWallet": "<address>",
+        "gasTreasury": "<address>",
+        "supportedToken": "<usdc>",
+        "registry": "<registry>",
+        "gasReimbursementHardCap": "50000"
+      }
+    },
+    "P2FluxSend": {
+      "address": "<address>",
+      "txHash": "<hash>",
+      "block": 0,
+      "constructorArgs": {
+        "supportedToken": "<usdc>",
+        "feeWallet": "<address>",
+        "gasTreasury": "<address>",
+        "relayer": "<address>",
+        "registry": "<registry>"
+      }
+    }
+  }
+}

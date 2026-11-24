@@ -4,7 +4,7 @@ pragma solidity 0.8.26;
 import {Test} from "forge-std/Test.sol";
 import {ReviewBase} from "./ReviewBase.sol";
 import {P2FluxFeeRegistry as Reg} from "../../../../contracts/v2/P2FluxFeeRegistry.sol";
-import {P2FluxSponsoredSplitterV2 as Sponsored} from "../../../../contracts/v2/P2FluxSponsoredSplitterV2.sol";
+import {P2FluxPaymentsV2 as Sponsored} from "../../../../contracts/v2/P2FluxPaymentsV2.sol";
 import {P2FluxSend} from "../../../../contracts/v2/P2FluxSend.sol";
 
 /// @notice Re-review ghost for the auto-effective timelock. The model is an EVENT LOG, not a slot:

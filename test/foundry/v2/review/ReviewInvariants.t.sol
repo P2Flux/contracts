@@ -5,7 +5,7 @@ import {Test, console2} from "forge-std/Test.sol";
 import {ReviewBase} from "./ReviewBase.sol";
 import {MockFiatToken} from "../../../../contracts/test/MockTokens.sol";
 import {P2FluxFeeRegistry as Reg} from "../../../../contracts/v2/P2FluxFeeRegistry.sol";
-import {P2FluxSponsoredSplitterV2 as Sponsored} from "../../../../contracts/v2/P2FluxSponsoredSplitterV2.sol";
+import {P2FluxPaymentsV2 as Sponsored} from "../../../../contracts/v2/P2FluxPaymentsV2.sol";
 import {P2FluxRecurringV2 as Recurring} from "../../../../contracts/v2/P2FluxRecurringV2.sol";
 import {P2FluxSend} from "../../../../contracts/v2/P2FluxSend.sol";
 

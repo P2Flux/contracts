@@ -28,9 +28,8 @@ All new files are in `contracts/v2/`. v1 files are not modified.
 | Contract | What it does | Replaces |
 |---|---|---|
 | `P2FluxFeeRegistry` | One per chain. Holds the three rates, the partner list, the caps and the timelock. Moves no money. | the `ONE_TIME_BPS` / `FEE_BPS` / `NETWORK_FEE` constants |
-| `P2FluxV2Base` (abstract) | Shared by the four payment contracts: pinned token (must have code and 6 decimals), immutable fee wallet, immutable registry, the one line of fee math. | - |
-| `P2FluxSplitterV2` | One-time payment, buyer pays own gas. | `P2FluxSplitter` |
-| `P2FluxSponsoredSplitterV2` | One-time payment, buyer has no gas: EIP-3009 signature, relayer submits. | `P2FluxSponsoredSplitter` |
+| `P2FluxV2Base` (abstract) | Shared by the three payment contracts: pinned token (must have code and 6 decimals), immutable fee wallet, immutable registry, the one line of fee math. | - |
+| `P2FluxPaymentsV2` | One-time payments, ONE contract with two entrances and ONE replay table: **self-pay** (`pay`, `payWithPermit`: buyer pays gas, no fixed fee) and **sponsored** (`payWithAuthorization`, relayer only: buyer signs EIP-3009, reimburses gas in USDC). An order settled through one entrance can never settle through the other (owner decision 2026-11-24, "1 contract is better than 2"). | `P2FluxSplitter` + `P2FluxSponsoredSplitter` |
 | `P2FluxRecurringV2` | Subscriptions. Same signature, period, revoke, EIP-7702 and ERC-1271 logic as v1, line for line; only the fee terms changed. EIP-712 domain version `"2"`. | `P2FluxRecurring` |
 | `P2FluxSend` | New. Send USDC to anyone, fees on top; direct or relayed. | - |
 
@@ -38,7 +37,7 @@ Not changed in v2 (keep using v1): `P2FluxGasSponsor`, `P2FluxGasRefill`, `P2Flu
 `P2FluxBatchVaults`. The x402 rates (1% with a floor, 3% batch) are not part of this price change.
 
 Why a **registry contract** rather than a base contract that stores rates in each payment contract:
-a price change or a partner listing is then one admin action per chain instead of four, all four
+a price change or a partner listing is then one admin action per chain instead of three, all three
 contracts can never disagree about a rate, and the timelock exists once. Cost: one external call per
 payment (measured below). The base contract still exists, but only for what is truly per-contract.
 
@@ -60,7 +59,7 @@ sub-unit remainder (the "dust", < 1 base unit = < 0.000001 USDC) stays with whoe
 the merchant on payments and subscriptions, the sender on sends. Every transfer is an exact amount,
 so no dust is ever left in a contract.
 
-### 3.1 One-time, buyer pays gas: `P2FluxSplitterV2.pay`
+### 3.1 One-time, buyer pays gas: `P2FluxPaymentsV2.pay` (entrance 1)
 
 | Who | Amount |
 |---|---|
@@ -71,7 +70,14 @@ so no dust is ever left in a contract.
 No fixed fee on this path: the buyer pays their own gas (owner rule). Example: 100 USDC → merchant 99.00,
 P2Flux 1.00; partner → 99.25 / 0.75.
 
-### 3.2 One-time, relayed: `P2FluxSponsoredSplitterV2.payWithAuthorization`
+### 3.2 One-time, relayed: `P2FluxPaymentsV2.payWithAuthorization` (entrance 2)
+
+Both entrances share `processedPayments[paymentId(token, recipient, amount, ref)]`, checked and
+written before any transfer, so the same order can never be paid through both (tests:
+`PaymentsCrossEntrance.t.sol`, both orders, same block, fuzz; fork tests on real Base USDC; invariant
+`invariant_orderSettlesAtMostOnceAcrossEntrances`). The id binds the full terms, not the bare `ref`,
+so nobody can block an order without actually paying it in full to its recipient. A refused
+sponsored attempt never consumes the buyer's EIP-3009 authorization.
 
 | Who | Amount |
 |---|---|
@@ -237,7 +243,7 @@ change would then need a new registry and new payment contracts). Hence: use a m
 | **Griefing** | Dust donated to a contract cannot brick it ("leave no more than found", not "hold zero"). Nobody but the admin can create, apply or cancel a change; effective time is fixed at scheduling. Unbounded partner list is never iterated on chain. |
 | **ERC-20 quirks** | Token pinned at deploy and must have code and `decimals() == 6`. False-returning or reverting transfers revert the payment (SafeERC20). A blacklisted fee wallet or gas treasury makes payments revert (as v1); since both are immutable, that would need a redeploy. Fee-on-transfer / rebasing tokens are not supported (USDC is neither); the residual-balance check would catch an over-delivery. |
 | Reentrancy | USDC has no hooks; sponsored, recurring and relayed send are `nonReentrant` anyway; effects before interactions. |
-| Registry bug | Affects all four contracts on that chain. Mitigated by size (~190 lines), tests and fuzzing, and the caps re-checked in every payment contract; it moves no funds, so a bug can at worst mis-price within caps or block payments. |
+| Registry bug | Affects all three payment contracts on that chain. Mitigated by size (~190 lines), tests and fuzzing, and the caps re-checked in every payment contract; it moves no funds, so a bug can at worst mis-price within caps or block payments. |
 
 Tools run: Foundry unit, fuzz (1000 runs) and stateful invariant suites; Slither (findings are the
 same by-design patterns as v1: signature-gated `transferFrom` from the payer, intentional balance
@@ -282,7 +288,8 @@ the CREATE2 deployer below exists.
 Deploy through the standard deterministic deployment proxy (`0x4e59b44847b379578588920cA78FbF26c0B4956C`,
 present on Base, Arbitrum, Optimism, Polygon; verify on Arc) with a fixed salt. None of the
 constructors reads `msg.sender`, so deploying through a factory is safe. Order: registry first (its
-address is a constructor argument of the other four), then the four payment contracts.
+address is a constructor argument of the other three), then payments, recurring and send: four
+contracts per chain in total (`script/DeployV2.s.sol`, manifest format `manifests/v2.template.json`).
 
 Honest limit: the address is a hash of the constructor arguments, and the USDC address differs on
 every chain, so **payment contracts get different addresses per chain** (predictable, recorded in the
@@ -294,7 +301,8 @@ initializer after deployment, which adds a front-running and misconfiguration ri
 
 | Call | v1 | v2 |
 |---|---|---|
-| Sponsored one-time | 187.6k | 197.8k (+10.2k: registry reads + cap re-check + partner lookup) |
+| Sponsored one-time (`payWithAuthorization`) | 187.6k | 198.0k (+10.4k: registry reads + cap re-check + partner lookup) |
+| Self-pay one-time (`pay`, fuzz average incl. cold accounts) | - | 123.5k |
 | Recurring charge (relayer) | 168.9k | 179.3k (+10.4k) |
 | Send direct | - | 98.3k |
 | Send relayed | - | 169.4k |
@@ -311,7 +319,7 @@ payment (N-03).
    or the payer re-subscribes; a payer's signature and allowance are bound to the v1 address, and
    moving them would need a new signature and approval from every payer. New subscriptions go to v2.
    Optionally offer merchants a "re-subscribe at the new price" flow later.
-3. New one-time payments go to v2 as soon as it is live; v1 splitters keep working for anyone who
+3. New one-time payments go to `P2FluxPaymentsV2` as soon as it is live; v1 splitters keep working for anyone who
    calls them directly (old SDKs, self-hosted checkouts).
 4. The API, checkout and indexers must accept **both** v1 and v2 contracts per chain for verifying
    payments, reading events and recovery, forever (historical payments stay on v1).
@@ -352,19 +360,18 @@ payment (N-03).
 - **Q6** Admin: which multisig (Safe, how many signers), same address on all chains?
 - **Q7** Send has no partner tier. Needed?
 - **Q8** Order of chains after Base, and Arc token capabilities (§8.2).
-- **Q9** (from the 2026-11-24 `auto` fee mode in the API) Cross-check between the sponsored and the plain
-  splitter: should each refuse a `(recipient, amount, ref)` the other already settled (one shared replay
-  table, or a read of the other contract's `isPaymentProcessed` before settling)? Today the API narrows the
-  window (it refuses the other half once one has settled or is pending, see R-06) and tells the merchant by
-  a `payment.duplicate` webhook if a second settlement still lands; only the contracts can close it.
+- ~~Q9~~ Resolved 2026-11-24 (owner): the two v2 splitters are merged into `P2FluxPaymentsV2` with one
+  shared replay table, so checkout `auto` (self-pay if the buyer has gas, else sponsored) cannot
+  double-pay within v2. Cross-version duplicates (an order paid on v1 and v2) remain an API rule (R-06).
 
 ## 13. Backend and ops rules (from the 2026-11-24 review)
 
 These are not enforced (or not fully enforceable) on chain; the API, relayer and ops must follow them.
 
-- **R-06: each order is bound to one contract.** The splitter v2, sponsored v2 and both v1 splitters
-  compute the same `paymentId` but keep separate replay tables, so the same `(recipient, amount, ref)`
-  can be settled once on each. The API records, per order, the one contract (and chain) it may be paid
+- **R-06: each order is bound to one contract version.** Within v2 the two entrances share one replay
+  table (closed on chain). The v1 splitter, v1 sponsored splitter and `P2FluxPaymentsV2` compute the
+  same `paymentId` but keep separate tables, so the same `(recipient, amount, ref)` could still be
+  settled once on v1 and once on v2. The API records, per order, the one contract (and chain) it may be paid
   through; before showing a pay button, accepting a payment or offering a refund it checks
   `isPaymentProcessed` on **all** splitter contracts (v1 and v2) for that id, and treats a second
   settlement as a duplicate to refund off chain.
@@ -378,7 +385,7 @@ These are not enforced (or not fully enforceable) on chain; the API, relayer and
   `send` keep working; relayer-run recurring charges also stop, since they pay the treasury). Steps:
   (1) watchdog alert on failing relayed paths / a `Blacklisted` event for our addresses; (2) switch
   the API to direct (buyer-pays-gas) flows only; (3) contact Circle; (4) if not lifted quickly, deploy
-  a new sponsored splitter and Send (and recurring for new subscriptions) with a fresh, clean treasury
+  a new `P2FluxPaymentsV2` and Send (and recurring for new subscriptions) with a fresh, clean treasury
   from the manifest, publish the new addresses, keep the old ones in the historical list. A
   blacklisted fee wallet stops every path that takes a fee: same steps, redeploying everything but
   the registry. Keep fee wallet and gas treasury clean, separate, single-purpose addresses.

@@ -3,8 +3,8 @@ pragma solidity 0.8.26;
 
 import {Test} from "forge-std/Test.sol";
 import {P2FluxFeeRegistry as Reg} from "../../../../contracts/v2/P2FluxFeeRegistry.sol";
-import {P2FluxSplitterV2} from "../../../../contracts/v2/P2FluxSplitterV2.sol";
-import {P2FluxSponsoredSplitterV2 as Sponsored} from "../../../../contracts/v2/P2FluxSponsoredSplitterV2.sol";
+import {P2FluxPaymentsV2} from "../../../../contracts/v2/P2FluxPaymentsV2.sol";
+import {P2FluxPaymentsV2 as Sponsored} from "../../../../contracts/v2/P2FluxPaymentsV2.sol";
 import {P2FluxRecurringV2 as Recurring} from "../../../../contracts/v2/P2FluxRecurringV2.sol";
 import {P2FluxSend} from "../../../../contracts/v2/P2FluxSend.sol";
 
@@ -51,7 +51,7 @@ contract ReviewForkTest is Test {
     address attacker = makeAddr("fork-attacker");
 
     Reg registry;
-    P2FluxSplitterV2 splitter;
+    P2FluxPaymentsV2 splitter;
     Sponsored sponsored;
     Recurring recurring;
     P2FluxSend sender;
@@ -68,8 +68,9 @@ contract ReviewForkTest is Test {
         if (block.chainid != 8453) return;
         payer = vm.addr(KEY);
         registry = new Reg(admin, Reg.Rate(100, 75, 50_000), Reg.Rate(150, 125, 50_000), Reg.Rate(10, 10, 50_000));
-        splitter = new P2FluxSplitterV2(address(USDC), feeWallet, address(registry));
+        // One payments contract; `splitter` = its self-pay entrance, `sponsored` = its sponsored one.
         sponsored = new Sponsored(address(USDC), feeWallet, gasTreasury, relayer, address(registry), 0.25e6);
+        splitter = sponsored;
         recurring = new Recurring(admin, relayer, feeWallet, gasTreasury, address(USDC), address(registry), 0.05e6);
         sender = new P2FluxSend(address(USDC), feeWallet, gasTreasury, relayer, address(registry));
         // Local fork only: become a minter and mint test USDC to the test payer.
@@ -216,4 +217,44 @@ contract ReviewForkTest is Test {
         vm.stopPrank();
         assertEq(USDC.balanceOf(merchant), 9.9e6);
     }
+
+    // --- one payments contract, two entrances, one replay table, on real USDC -------------------
+
+    function _selfPay(uint256 amount, bytes32 ref) internal {
+        vm.startPrank(payer);
+        USDC.approve(address(splitter), amount);
+        splitter.pay(address(USDC), merchant, amount, ref);
+        vm.stopPrank();
+    }
+
+    function test_fork_selfPaidThenSponsoredReverts() public onlyFork {
+        uint256 b0 = USDC.balanceOf(payer);
+        _selfPay(10e6, bytes32("x1"));
+        Sponsored.SponsoredPayment memory p = _sp(10e6, bytes32("x1"), 0.02e6);
+        bytes32 n = sponsored.authorizationNonce(p);
+        (uint8 v, bytes32 r, bytes32 s) = _signReceive(address(sponsored), 10.02e6, p.validBefore, n);
+        bytes32 id = sponsored.paymentId(address(USDC), merchant, 10e6, bytes32("x1"));
+        vm.prank(relayer);
+        vm.expectRevert(abi.encodeWithSelector(Sponsored.PaymentAlreadyProcessed.selector, id));
+        sponsored.payWithAuthorization(p, v, r, s);
+        assertEq(b0 - USDC.balanceOf(payer), 10e6, "debited once");
+        assertEq(USDC.balanceOf(merchant), 9.9e6, "self-pay: no fixed fee");
+        assertEq(USDC.balanceOf(gasTreasury), 0);
+        assertFalse(USDC.authorizationState(payer, n), "buyer signature not consumed");
+    }
+
+    function test_fork_sponsoredThenSelfPaidReverts() public onlyFork {
+        uint256 b0 = USDC.balanceOf(payer);
+        _paySponsored(_sp(10e6, bytes32("x2"), 0.02e6));
+        bytes32 id = sponsored.paymentId(address(USDC), merchant, 10e6, bytes32("x2"));
+        vm.startPrank(payer);
+        USDC.approve(address(splitter), 10e6);
+        vm.expectRevert(abi.encodeWithSelector(Sponsored.PaymentAlreadyProcessed.selector, id));
+        splitter.pay(address(USDC), merchant, 10e6, bytes32("x2"));
+        vm.stopPrank();
+        assertEq(b0 - USDC.balanceOf(payer), 10.02e6, "debited once");
+        assertEq(USDC.balanceOf(merchant), 9.85e6);
+        assertEq(USDC.balanceOf(address(sponsored)), 0);
+    }
 }
+

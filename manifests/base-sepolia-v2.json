@@ -2,7 +2,7 @@
   "network": "Base Sepolia",
   "chainId": 84532,
   "version": "v2",
-  "status": "test",
+  "status": "test-superseded",
   "deployedAt": "2026-11-24",
   "commit": "8079ad1480c533715ef97f4e3d4147d81a073347",
   "branch": "feat/contracts-v2",
@@ -125,5 +125,6 @@
       "sourcify": "https://repo.sourcify.dev/84532/0xc97eFaf3e8e7c0538441408319c76570e81BbD4A",
       "sourcifyMatch": "exact_match"
     }
-  }
+  },
+  "supersededNote": "Historical record of the 2026-11-24 Base Sepolia test deployment (commit 8079ad1). P2FluxSplitterV2 and P2FluxSponsoredSplitterV2 were merged into P2FluxPaymentsV2 afterwards; a new 4-contract test deployment (registry, payments, recurring, send) follows on owner instruction, with a manifest in the format of manifests/v2.template.json."
 }

@@ -4,7 +4,7 @@ pragma solidity 0.8.26;
 import {Test} from "forge-std/Test.sol";
 import {MockFiatToken} from "../../../../contracts/test/MockTokens.sol";
 import {P2FluxFeeRegistry as Reg} from "../../../../contracts/v2/P2FluxFeeRegistry.sol";
-import {P2FluxSponsoredSplitterV2 as Sponsored} from "../../../../contracts/v2/P2FluxSponsoredSplitterV2.sol";
+import {P2FluxPaymentsV2 as Sponsored} from "../../../../contracts/v2/P2FluxPaymentsV2.sol";
 
 /// @notice Symbolic checks for halmos (`check_` prefix; forge ignores them). Every legal rate at once:
 ///         halmos --root . --match-contract ReviewHalmos --solver-timeout-assertion 0

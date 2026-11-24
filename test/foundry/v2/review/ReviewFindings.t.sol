@@ -3,8 +3,8 @@ pragma solidity 0.8.26;
 
 import {ReviewBase} from "./ReviewBase.sol";
 import {P2FluxFeeRegistry} from "../../../../contracts/v2/P2FluxFeeRegistry.sol";
-import {P2FluxSplitterV2} from "../../../../contracts/v2/P2FluxSplitterV2.sol";
-import {P2FluxSponsoredSplitterV2 as Sponsored} from "../../../../contracts/v2/P2FluxSponsoredSplitterV2.sol";
+import {P2FluxPaymentsV2} from "../../../../contracts/v2/P2FluxPaymentsV2.sol";
+import {P2FluxPaymentsV2 as Sponsored} from "../../../../contracts/v2/P2FluxPaymentsV2.sol";
 import {P2FluxRecurringV2 as Recurring} from "../../../../contracts/v2/P2FluxRecurringV2.sol";
 import {P2FluxSend} from "../../../../contracts/v2/P2FluxSend.sol";
 import {P2FluxV2Base} from "../../../../contracts/v2/P2FluxV2Base.sol";
@@ -41,7 +41,7 @@ contract NotARegistry {
 }
 
 /// @notice Regression tests for docs/v2-review-2026-11-24.md. The review's PoCs demonstrated the
-///         findings; after the fixes each one is inverted here and must pass. R-06, R-07 and R-08 are
+///         findings; after the fixes each one is inverted here and must pass. R-07 and R-08 are
 ///         accepted / handled off chain and stay as documentation of the bound.
 contract ReviewFindingsTest is ReviewBase {
     function setUp() public {
@@ -94,7 +94,8 @@ contract ReviewFindingsTest is ReviewBase {
 
     function test_R02_rogueRegistryCannotExceedCaps() public {
         RogueRegistry rogue = new RogueRegistry();
-        P2FluxSplitterV2 s2 = new P2FluxSplitterV2(address(token), feeWallet, address(rogue));
+        P2FluxPaymentsV2 s2 =
+            new P2FluxPaymentsV2(address(token), feeWallet, gasTreasury, relayer, address(rogue), NETWORK_CAP);
         Sponsored sp2 = new Sponsored(address(token), feeWallet, gasTreasury, relayer, address(rogue), NETWORK_CAP);
         token.mint(payer, 100e6);
         vm.prank(payer);
@@ -126,9 +127,9 @@ contract ReviewFindingsTest is ReviewBase {
     function test_R02_registryValidatedAtConstruction() public {
         address notReg = address(new NotARegistry());
         vm.expectRevert();
-        new P2FluxSplitterV2(address(token), feeWallet, notReg);
+        new P2FluxPaymentsV2(address(token), feeWallet, gasTreasury, relayer, notReg, NETWORK_CAP);
         vm.expectRevert(P2FluxV2Base.NotAContract.selector);
-        new P2FluxSplitterV2(address(token), feeWallet, makeAddr("eoa"));
+        new P2FluxPaymentsV2(address(token), feeWallet, gasTreasury, relayer, makeAddr("eoa"), NETWORK_CAP);
     }
 
     // --- R-03: isChargeable follows the current rates ---------------------------------------------
@@ -188,9 +189,9 @@ contract ReviewFindingsTest is ReviewBase {
         assertEq(fee, 50e6 * 11 / 10_000);
     }
 
-    // --- R-06 (accepted, API rule): one paymentId per contract table -------------------------------
+    // --- R-06 (fixed on chain for v2 one-time): one replay table for both entrances -------------
 
-    function test_R06_sameOrderPaidTwiceAcrossContracts() public {
+    function test_R06_sameOrderCannotBePaidThroughBothEntrances() public {
         bytes32 ref = bytes32("order-42");
         token.mint(payer, 200e6);
         vm.startPrank(payer);
@@ -200,9 +201,11 @@ contract ReviewFindingsTest is ReviewBase {
 
         Sponsored.SponsoredPayment memory p = _sp(merchant, 100e6, ref, 0);
         (uint8 v, bytes32 r, bytes32 s) = _signSp(p);
+        bytes32 id = sponsored.paymentId(address(token), merchant, 100e6, ref);
         vm.prank(relayer);
+        vm.expectRevert(abi.encodeWithSelector(Sponsored.PaymentAlreadyProcessed.selector, id));
         sponsored.payWithAuthorization(p, v, r, s);
-        assertEq(token.balanceOf(payer), 0, "documented: the API binds each order to ONE contract");
+        assertEq(token.balanceOf(payer), 100e6, "paid once; v1-vs-v2 stays an API rule (design 13)");
     }
 
     // --- R-07 (policy, relayer-side) and R-07b (fixed: no gas quote on Send) -----------------------
