@@ -1,15 +1,18 @@
 # P2Flux contracts v2: design
 
 Status: **draft on branch `feat/contracts-v2`, not deployed anywhere, no third-party audit.**
-Written 2026-11-23 for the prices the owner agreed that day. v1 (`main` = `eda94d7`, live on Base)
-stays exactly as it is.
+Written 2026-11-23 for the prices the owner agreed that day; updated 2026-11-24 after the internal
+review (`docs/v2-review-2026-11-24.md`, fixes in §13). v1 (`main` = `eda94d7`, live on Base) stays
+exactly as it is.
 
 ## 1. Goals
 
 1. New prices: one-time 1% (partners 0.75%), subscription renewal 1.5% (partners 1.25%), fixed fee
    0.05 USDC paid by the merchant (replaces 0.10), buyer still pays the real gas on top when relayed.
-2. A new **Send** tool: 0.1% on top, plus 0.05 USDC only when relayed; the receiver gets the exact
-   amount; minimum 1 USDC; no maximum.
+   **Owner rule: no fixed fee when the payer pays their own gas** - the 0.05 applies only when
+   P2Flux's relayer sends the transaction.
+2. A new **Send** tool: 0.1% on top, plus 0.05 USDC only when relayed (and no separate gas quote:
+   owner decision 2026-11-24); the receiver gets the exact amount; minimum 1 USDC; no maximum.
 3. Fees adjustable **without redeploying**, but only under hard caps written in the code and only
    after a public 48-hour waiting period.
 4. A partner (white-label) tier that a merchant can never give themselves.
@@ -41,8 +44,12 @@ payment (measured below). The base contract still exists, but only for what is t
 
 ## 3. Fee paths, exact math, rounding
 
-Notation: `bps` and `fixed` are read from the registry **at execution time**; `bps` is the partner
-rate when `registry.isPartner(recipient)`. All amounts are USDC base units (6 decimals).
+Notation: `bps` and `fixed` are read from the registry **at execution time** (the value effective
+at `block.timestamp`); `bps` is the partner rate when `registry.isPartner(recipient)`. Each payment
+contract re-checks the hard caps on what the registry returns (`bps <= 200`, partner `<=` standard,
+`fixed <= 0.20`) and reverts `RateAboveCap` otherwise. `fixed` is charged **only on relayed paths**.
+Every path refuses a recipient equal to the contract itself (`InvalidRecipient`; funds sent there
+could never leave). All amounts are USDC base units (6 decimals).
 
 ```
 fee = floor(amount * bps / 10_000)
@@ -61,7 +68,7 @@ so no dust is ever left in a contract.
 | recipient | `amount - fee` |
 | fee wallet | `fee` (1% or 0.75%) |
 
-No fixed fee on this path, as in v1 (see open question Q1). Example: 100 USDC → merchant 99.00,
+No fixed fee on this path: the buyer pays their own gas (owner rule). Example: 100 USDC → merchant 99.00,
 P2Flux 1.00; partner → 99.25 / 0.75.
 
 ### 3.2 One-time, relayed: `P2FluxSponsoredSplitterV2.payWithAuthorization`
@@ -93,10 +100,22 @@ quote and execution only the merchant's split changes (test `test_rateChangeDoes
 | fee wallet | `fee` (1.5% or 1.25%) |
 | gas treasury | `fixed + reimbursement` |
 
-`reimbursement` only for the relayer, `<= auth.maxGasReimbursement` (payer-signed) and
-`<= GAS_REIMBURSEMENT_HARD_CAP` (per chain, constructor, never above 1 USDC). Refused unless
-`amount > fee + fixed`. Example: 10 USDC → merchant 9.80 (partner 9.825). A rate change applies to
-the next charge of an existing subscription, after the timelock; the payer's debit never changes.
+`fixed` and `reimbursement` only when the **relayer** runs the charge; when the payer, the merchant or
+anyone else runs it (and pays the gas), both are 0 and the merchant gets `amount - fee`.
+`reimbursement <= auth.maxGasReimbursement` (payer-signed) and `<= GAS_REIMBURSEMENT_HARD_CAP` (per
+chain, constructor, never above 1 USDC). Refused unless `amount > fee + fixed`. Example: 10 USDC →
+merchant 9.80 (partner 9.825), or 9.85 when self-executed. A rate change applies to the next charge
+of an existing subscription, after the timelock; the payer's debit never changes. Trade-off: a
+merchant can self-execute a due charge to skip the 0.05, but then pays the gas itself.
+
+`isChargeable` also returns false when `amount <= fee + fixed` at the **current** rates (counted as
+a relayer charge), so the relayer's scheduler sees a subscription that a fee increase made
+uncoverable instead of wasting gas on reverts.
+
+**Recommended minimum subscription amount (API rule):** at the caps (2% + 0.20) the smallest amount
+that stays chargeable is `floor(0.20e6 * 10_000 / 9_800) + 1 = 204_082` base units (0.204082 USDC;
+fuzz-tested at every legal rate). The API should refuse subscriptions below **1 USDC** (simple, far
+above that bound), and never below 0.21 USDC.
 
 ### 3.4 Send, direct: `P2FluxSend.send(to, amount, maxFee, ref)`
 
@@ -114,14 +133,15 @@ block can never take more than the sender agreed to. `sendWithPermit` does a per
 
 | Who | Amount |
 |---|---|
-| sender debited (signs exactly this) | `amount + fee + fixed + networkFee` |
+| sender debited (signs exactly this) | `amount + fee + fixed` |
 | receiver | `amount` exactly |
 | fee wallet | `fee` |
-| gas treasury | `fixed + networkFee` |
+| gas treasury | `fixed` |
 
 The sender signs the exact total, so any different fee makes the token reject the signature; no
 `maxFee` is needed (test `test_relayed_rateChangeInvalidatesSignature`). Replay: the token burns the
-nonce, which binds every term including `ref`. Example: 100 USDC, gas 0.01 → sender 100.16.
+nonce, which binds every term including `ref`. There is no gas-quote field at all (R-07b): 0.05 is
+the whole relay charge. Example: 100 USDC → sender 100.15.
 
 ### 3.6 Rounding and tiny amounts
 
@@ -138,15 +158,26 @@ nonce, which binds every term including `ref`. Example: 100 USDC, gas 0.01 → s
 | Partner rate | `<= ` standard rate of the same kind | checked on every change |
 | Max fixed fee | 0.20 USDC | `MAX_FIXED_FEE`, constant in code |
 | Delay | 48 h | `DELAY`, constant |
-| Grace (execute window after the delay) | 7 days, then the change lapses | `GRACE`, constant |
-| Max per-chain gas cap (network fee / reimbursement) | 1 USDC | constructor check |
+| Effective time | exactly schedule time + 48 h, automatically | no execute call exists |
+| Max per-chain gas cap (sponsored network fee / recurring reimbursement) | 1 USDC | constructor check |
+| Caps re-checked by every payment contract | same values | `P2FluxV2Base._rate` |
+| Registry sanity at construction | `MAX_BPS == 200`, `MAX_FIXED_FEE == 0.20`, `DELAY == 48 h`, `rates()` answers | `P2FluxV2Base` constructor |
+
+**Auto-effective timelock (R-05, R-09).** Each rate kind and each partner address has one slot:
+`current`, `next`, `eta`. Every read returns `next` once `block.timestamp >= eta`, otherwise
+`current`. So a change takes effect exactly at its ETA, by itself; nobody chooses the moment and
+there is no execute call (and no batch that one stale entry could block).
 
 Flow: `scheduleRate(kind, rate)` / `schedulePartners(list, bool)` (admin only; checks caps; emits
-`RateScheduled` / `PartnerScheduled` with the ETA) → visible on chain as `pendingRates`,
-`pendingRateEta`, `pendingPartner`, `pendingPartnerEta` → `cancelRate` / `cancelPartner` (admin)
-or, between ETA and ETA + 7 d, `executeRate` / `executePartners` (**anyone**; the change has been
-public for 48 h, and this way a multisig only signs once). Rescheduling restarts the clock. Initial
-rates are set in the constructor and checked against the same caps.
+`RateScheduled` / `PartnerScheduled` with `effectiveAt`) → visible on chain via `pendingRate(kind)` /
+`pendingPartner(addr)` → `cancelRate` / `cancelPartner` (admin) **before** the ETA; from the ETA on
+the change is live and undoing it means scheduling the old value (another 48 h). Scheduling again
+first keeps whatever is already effective, then replaces the pending value and restarts the clock.
+Initial rates are set in the constructor (emitted as `RateScheduled` with `effectiveAt = deploy
+time`) and checked against the same caps.
+
+Ops: the API should stop quoting relayed sends at the old rate shortly before a known ETA (a relayed
+send signed at the old total fails once the new rate is live; the sender re-signs).
 
 Initial values (owner, 23 Nov 2026): OneTime `{100, 75, 50_000}`, Recurring `{150, 125, 50_000}`,
 Send `{10, 10, 50_000}`.
@@ -157,10 +188,10 @@ Send `{10, 10, 50_000}`.
 |---|---|---|
 | Can a merchant pick a lower fee? | No: tier is looked up by recipient in a registry only the admin changes. | No, if the quote is bound to the exact payment; yes if binding is wrong (extra attack surface). |
 | Key at risk | Admin (cold / multisig, rarely used). Compromise: timelocked, visible, bounded by caps. | Quote signer must be **hot** (signs every payment). Compromise: instant 0% for anyone, invisible until noticed. |
-| Gas | +1 external call, about +8.5k gas per payment (measured, see §9). | ecrecover + 65 bytes + struct hashing, similar or more. |
+| Gas | registry reads, about +15k gas per payment (measured, see §9). | ecrecover + 65 bytes + struct hashing, similar or more. |
 | Simplicity | ~180 lines, no signatures. | Signer rotation, nonce/expiry, binding into buyer signature or recurring charge, all paths need the API. |
 | Self-pay and direct users | Work without the API. | Every payment needs an API quote, even `pay` from a wallet. |
-| Ops | Listing a partner wallet = one admin tx + 48 h + execute; batched (`schedulePartners(list)`). | Instant changes in the API database. |
+| Ops | Listing a partner wallet = one admin tx, effective 48 h later; batched (`schedulePartners(list)`). | Instant changes in the API database. |
 | Transparency | Anyone can check a merchant's rate on chain. | Only in each payment's quote. |
 
 **Decision: (a), implemented.** It keeps the only fee-changing key cold and timelocked, keeps every
@@ -177,7 +208,13 @@ is timelocked too. More than two tiers is not built (YAGNI); it would become `re
 | Fee wallet | P2Flux | Receive percentage fees | Anything on the contracts |
 | Gas treasury | Cold wallet | Receive fixed fees + gas | Anything on the contracts |
 | Deployer | Fresh key per deployment, unfunded after | Nothing after deployment | - |
-| Anyone | - | `executeRate` / `executePartners` once due; call `charge` with zero reimbursement (as v1) | - |
+| Anyone | - | Call `charge` for a due subscription; gets no reimbursement and no fixed fee is taken (as v1, plus R-04) | Change or apply any registry value |
+
+**`setRelayer` is instant on purpose (R-08, accepted).** If the relayer key leaks, the admin must be
+able to swap it in the same block; a timelock would leave the leaked key live for 48 h. The cost is
+bounded: a malicious relayer (or a compromised admin who installs one) can only attach up to
+`min(signed maxGasReimbursement, GAS_REIMBURSEMENT_HARD_CAP)` per due charge, and that money goes to
+the immutable gas treasury, not to the attacker. Watchdog alerts on `RelayerChanged`.
 
 The admin is immutable (no transfer function). With a multisig, signer rotation happens inside the
 multisig. If a cold EOA admin is lost, rates freeze at their current values (safe, but a price
@@ -191,14 +228,16 @@ change would then need a new registry and new payment contracts). Hence: use a m
 | Malicious merchant sets a wallet that cannot receive (blacklisted) | That merchant's payments revert; nothing else affected. |
 | **Compromised relayer** | Same bounds as v1: only signed payments; network fee ≤ signed and ≤ per-chain cap; reimbursement ≤ signed and ≤ cap. Admin rotates the recurring relayer; sponsored/send relayers are immutable, so a compromise means redeploying those two (no long-lived state in them). |
 | **Compromised admin** | Can raise rates up to 2% + 0.20 USDC, or (un)list partners, each only after 48 h in public. Cannot touch payer debits (except send fees, which the sender signs or caps). Can point the recurring relayer at itself → bounded as a compromised relayer. Defence: multisig; watchdog alert on `RateScheduled` / `PartnerScheduled` / `RelayerChanged`; publish changes to merchants. Because the admin is immutable, a compromised admin stays able to re-schedule; the recovery is new contracts. |
-| **Front-running** a rate execution | Payers never see a different debit (merchant-funded fees; relayed sends signed exactly; direct sends `maxFee`). Merchants had 48 h notice. |
+| **Front-running** a rate change | There is no execute call to front-run: a change is live exactly at its public ETA. Payers never see a different debit (merchant-funded fees; relayed sends signed exactly; direct sends `maxFee`). Merchants had 48 h notice. |
+| Payment to the contract itself | Refused on every path (`InvalidRecipient`, R-01); funds there could never leave. |
+| Wrong registry address in a manifest / registry bug | Constructor sanity read (caps, delay, `rates()`); every payment re-checks the caps on what the registry returns (R-02). Worst case is bounded by 2% + 0.20, never 100%. |
 | Front-running a permit | Swallowed (try/catch), as v1. |
 | Front-running a sponsored payment / relayed send | Relayer-only, as v1. A stranger cannot call `receiveWithAuthorization` for our contract (token requires `to == msg.sender`). |
 | **Replay** | One-time: per-contract `processedPayments[paymentId]`. Sponsored / relayed send: token-burned EIP-3009 nonce binding chain + contract + all terms. Recurring: one charge per period per subscription id; v1 signatures cannot charge v2 (domain version "2", different contract; test `test_v1SignatureRefused`). |
-| **Griefing** | Dust donated to a contract cannot brick it ("leave no more than found", not "hold zero"). A stale scheduled change lapses after 7 days, so nobody can apply a forgotten change later. Unbounded partner list is never iterated on chain. |
+| **Griefing** | Dust donated to a contract cannot brick it ("leave no more than found", not "hold zero"). Nobody but the admin can create, apply or cancel a change; effective time is fixed at scheduling. Unbounded partner list is never iterated on chain. |
 | **ERC-20 quirks** | Token pinned at deploy and must have code and `decimals() == 6`. False-returning or reverting transfers revert the payment (SafeERC20). A blacklisted fee wallet or gas treasury makes payments revert (as v1); since both are immutable, that would need a redeploy. Fee-on-transfer / rebasing tokens are not supported (USDC is neither); the residual-balance check would catch an over-delivery. |
 | Reentrancy | USDC has no hooks; sponsored, recurring and relayed send are `nonReentrant` anyway; effects before interactions. |
-| Registry bug | Affects all four contracts on that chain. Mitigated by size (~180 lines), tests and fuzzing; it moves no funds, so a bug can at worst mis-price within caps or block payments. |
+| Registry bug | Affects all four contracts on that chain. Mitigated by size (~190 lines), tests and fuzzing, and the caps re-checked in every payment contract; it moves no funds, so a bug can at worst mis-price within caps or block payments. |
 
 Tools run: Foundry unit, fuzz (1000 runs) and stateful invariant suites; Slither (findings are the
 same by-design patterns as v1: signature-gated `transferFrom` from the payer, intentional balance
@@ -219,7 +258,7 @@ parameters change.
 | Gas treasury | per chain or same | | | | |
 | Relayer | per chain hot key | | | | |
 | Admin | multisig (same address everywhere if possible) | | | | |
-| `MAX_NETWORK_FEE_HARD_CAP` (sponsored, send) | 0.25 USDC (as v1) | measure | measure | measure | measure |
+| `MAX_NETWORK_FEE_HARD_CAP` (sponsored only; Send has no gas quote) | 0.25 USDC (as v1) | measure | measure | measure | measure |
 | `GAS_REIMBURSEMENT_HARD_CAP` (recurring) | 0.05 USDC (as v1) | measure | measure | measure | measure |
 | Initial rates | §4 | §4 | §4 | §4 | §4 |
 
@@ -251,14 +290,14 @@ manifest before deploying). The registry can have the **same address on every ch
 address and initial rates are identical. Identical payment-contract addresses would need an
 initializer after deployment, which adds a front-running and misconfiguration risk; not worth it.
 
-## 9. Gas (measured, Foundry, mock USDC)
+## 9. Gas (measured, Foundry, mock USDC, after the review fixes)
 
 | Call | v1 | v2 |
 |---|---|---|
-| Sponsored one-time | 187.6k | 196.1k (+8.5k) |
-| Recurring charge | 168.9k | 177.4k (+8.5k) |
-| Send direct | - | 100.2k |
-| Send relayed | - | 171.7k |
+| Sponsored one-time | 187.6k | 202.2k (+14.6k: registry reads + cap re-check + partner lookup) |
+| Recurring charge (relayer) | 168.9k | 183.6k (+14.7k) |
+| Send direct | - | 102.8k |
+| Send relayed | - | 173.9k |
 
 ## 10. Migration
 
@@ -278,13 +317,16 @@ initializer after deployment, which adds a front-running and misconfiguration ri
 ## 11. What changes later in API, checkout, SDKs (list only)
 
 - Price tables: read rates from the registry (`feeFor`, `rates`, `isPartner`) instead of constants;
-  show pending changes (`pendingRates`, `pendingRateEta`) to merchants.
+  show pending changes (`pendingRate`, `pendingPartner`, `effectiveAt`) to merchants.
 - Sponsored v2 nonce: new domain tag, no fixed fee in it (new `authorizationNonce` layout).
 - Recurring v2 EIP-712 domain version `"2"`; new contract address in typed data.
 - Send product: quote endpoint (`quote(amount)`), `maxFee` for direct sends, relayed send with
-  `amount + fee + fixed + networkFee`.
-- Partner admin flow: list of partner wallets → `schedulePartners` batch prepared for the multisig,
-  then `executePartners` after 48 h (any key can execute).
+  `amount + fee + fixed` (no gas quote); stop quoting the old rate shortly before a known ETA.
+- Partner admin flow: list of partner wallets → `schedulePartners` batch prepared for the multisig;
+  live 48 h later with no further transaction.
+- Recurring: subscription minimum 1 USDC (§3.3); scheduler uses `isChargeable`; merchant net is
+  `amount - fee` when a charge is not relayer-run.
+- Refuse P2Flux contract addresses as merchant / receiver wallets (also enforced on chain).
 - Watchdog: alert on `RateScheduled`, `RateCancelled`, `PartnerScheduled`, `RelayerChanged`.
 - Multi-chain: per-chain contract sets, relayers, gas caps, RPCs; chain id in every quote.
 - Contract allow-list in checkout and self-hosted checkout: add v2 addresses, keep v1.
@@ -296,14 +338,46 @@ initializer after deployment, which adds a front-running and misconfiguration ri
 
 ## 12. Open questions for the owner
 
-- **Q1** Self-pay one-time (`P2FluxSplitterV2.pay`) has no fixed fee today, and v2 keeps it that way.
-  Should the 0.05 apply there too?
+- ~~Q1~~ Decided 2026-11-24: no fixed fee whenever the payer pays their own gas (all paths).
 - **Q2** The fixed fee goes to the **gas treasury** (as today's 0.10 does). Should it be revenue
   (fee wallet) instead?
-- **Q3** Relayed send: is 0.05 the whole relay charge, or does the sender also pay the quoted real gas
-  (`networkFee`) on top? The contract supports both; the API can quote `networkFee = 0`.
+- ~~Q3~~ Decided 2026-11-24: relayed Send = 0.1% + 0.05, no gas quote (field removed from the contract).
 - **Q4** Caps: 2% and 0.20 USDC (today's recurring price as ceiling). Enough headroom?
-- **Q5** Delay 48 h and grace 7 days: OK? Longer (7 days) would give merchants more notice.
+- **Q5** Delay 48 h (auto-effective, no grace any more): OK? Longer (7 days) would give merchants more
+  notice.
 - **Q6** Admin: which multisig (Safe, how many signers), same address on all chains?
 - **Q7** Send has no partner tier. Needed?
 - **Q8** Order of chains after Base, and Arc token capabilities (§8.2).
+
+## 13. Backend and ops rules (from the 2026-11-24 review)
+
+These are not enforced (or not fully enforceable) on chain; the API, relayer and ops must follow them.
+
+- **R-06: each order is bound to one contract.** The splitter v2, sponsored v2 and both v1 splitters
+  compute the same `paymentId` but keep separate replay tables, so the same `(recipient, amount, ref)`
+  can be settled once on each. The API records, per order, the one contract (and chain) it may be paid
+  through; before showing a pay button, accepting a payment or offering a refund it checks
+  `isPaymentProcessed` on **all** splitter contracts (v1 and v2) for that id, and treats a second
+  settlement as a duplicate to refund off chain.
+- **R-07: relayer policy for Send.** A relayed send is a cheap, gasless, ref-tagged rail (0.1% + 0.05
+  vs 1% + 0.05 for a sponsored payment), and the contract cannot tell a gift from a sale. The relayer
+  refuses relayed sends to known merchant wallets (registered recipients, payment-link wallets),
+  rate-limits per sender and per receiver, and keeps Send out of merchant integrations (no `ref`
+  invoice flows). Direct sends (sender pays gas) are open to anyone and earn the 0.1%.
+- **R-10: gas-treasury (or fee-wallet) blacklist runbook.** Both addresses are immutable. If Circle
+  blacklists the gas treasury, every sponsored payment and relayed send reverts (direct `pay` and
+  `send` keep working; relayer-run recurring charges also stop, since they pay the treasury). Steps:
+  (1) watchdog alert on failing relayed paths / a `Blacklisted` event for our addresses; (2) switch
+  the API to direct (buyer-pays-gas) flows only; (3) contact Circle; (4) if not lifted quickly, deploy
+  a new sponsored splitter and Send (and recurring for new subscriptions) with a fresh, clean treasury
+  from the manifest, publish the new addresses, keep the old ones in the historical list. A
+  blacklisted fee wallet stops every path that takes a fee: same steps, redeploying everything but
+  the registry. Keep fee wallet and gas treasury clean, separate, single-purpose addresses.
+- **R-08:** instant `setRelayer` is kept for incident response (see §6).
+
+Changes made in response to the review (commit after `a9894a6`): R-01 `InvalidRecipient` everywhere;
+R-02 caps re-checked in `P2FluxV2Base._rate`, registry sanity read at construction, `minimumAmount`
+can no longer divide by zero; R-03 `isChargeable` uses current rates; R-04 fixed fee only on relayed
+paths; R-05 and R-09 auto-effective timelock, `executeRate`, `executePartners` and the 7-day grace
+removed; R-07b `networkFee` removed from Send; T-01 fuzzed recipients exclude the partner. The
+review's PoCs are now regression tests in `test/foundry/v2/review/ReviewFindings.t.sol`.
