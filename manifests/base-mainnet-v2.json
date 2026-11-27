@@ -1,0 +1,77 @@
+{
+  "network": "Base",
+  "chainId": 8453,
+  "version": "v2",
+  "status": "live",
+  "deployedAt": "2026-11-27",
+  "commit": "2b00846",
+  "branch": "feat/contracts-v2",
+  "script": "script/DeployV2.s.sol",
+  "compiler": {
+    "solc": "0.8.26",
+    "evmVersion": "cancun",
+    "optimizer": true,
+    "runs": 200
+  },
+  "deployer": "0x1089f4E0E82D00cFdA6EC7B5C939ea0dc22a8B87",
+  "admin": "0xEc8779352AF47C5CbF877e1B22B5CFF6Df042410",
+  "relayer": "0xF3Ca1D6BC5ad6Ca054eCa65a45117Ebff2a52309",
+  "feeWallet": "0x12FDDADa5C8d027537B90342a68F5dd1A79C8feB",
+  "gasTreasury": "0xdCdE2146cF3ab9aE37933211AF8943c807c31506",
+  "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "initialRates": {
+    "oneTime": {
+      "bps": 100,
+      "partnerBps": 75,
+      "fixedFee": 50000
+    },
+    "recurring": {
+      "bps": 150,
+      "partnerBps": 125,
+      "fixedFee": 50000
+    },
+    "send": {
+      "bps": 10,
+      "partnerBps": 10,
+      "fixedFee": 50000
+    }
+  },
+  "caps": {
+    "maxBps": 200,
+    "maxFixedFee": 200000,
+    "delaySeconds": 172800,
+    "maxNetworkFeeHardCap": 250000,
+    "gasReimbursementHardCap": 50000
+  },
+  "contracts": {
+    "registry": {
+      "address": "0xD2cF395AD32FadA56f9915b30cF27D38f810FE06",
+      "deployTx": "0x69366231b7478f5ad20f7a4e2268ecbb75e1be643bdead2f6dd7754cac1b1c50",
+      "block": 62901320,
+      "gasUsed": 1106112
+    },
+    "payments": {
+      "address": "0x5915dc4808D0b04588cec96C186C71777F5523b6",
+      "deployTx": "0x33840d03e8226530c46ce49f5570ba937d09f318fcdb59162f5fa1d8bc1d93da",
+      "block": 62901336,
+      "gasUsed": 1226869
+    },
+    "recurring": {
+      "address": "0x5CA68E8dF8409DF35434B35E93fcBc81D9DE7919",
+      "deployTx": "0xd33f6f971882587849745680643ed2d6a698a5c3cf8021d6cbe9cfa7eab964c5",
+      "block": 62901346,
+      "gasUsed": 1797652
+    },
+    "send": {
+      "address": "0xD8705734c5eD8d736879F9BAe588Fb74d63b8235",
+      "deployTx": "0x6044852945814bdcab24ccb9dde879b7f6b68c7c0dc6589728679bcb3da40f0b",
+      "block": 62901354,
+      "gasUsed": 1029417
+    }
+  },
+  "verification": {
+    "sourcify": "exact_match (creation + runtime), all four, 2026-11-27"
+  },
+  "readBack": "2026-11-27: admin, relayer, feeWallet, gasTreasury, usdc, registry on every contract; rates 100/75/50000, 150/125/50000, 10/10/50000; caps 200 bps / 200000; DELAY 172800; MAX_NETWORK_FEE_HARD_CAP 250000; GAS_REIMBURSEMENT_HARD_CAP 50000 - all as intended",
+  "ownerOk": "2026-11-27 \"everything looks good. deploy\" after internal review 3 (no blocker; not a third-party review)"
+}
