@@ -51,6 +51,18 @@ export declare const BASE_MAINNET: {
     readonly batchVaults: "0xa62eDD9B45a0564a63C248564335BA7B2E3877A4";
     /** P2FluxGasRefill (keeps the relayer in gas from the gas treasury's USDC), 2026-10-01, manifest 48bebefb…2adc (nonce 6). */
     readonly gasRefill: "0x78cb470600EA0D68cE846bfc3bB455786BF56537";
+    /**
+     * Contracts v2, deployed 2026-11-27 by deployer 0x1089f4E0…8B87 (nonces 0-3), Sourcify exact_match,
+     * manifest manifests/base-mainnet-v2.json. Fees live in the registry (48 h delay on every change).
+     */
+    readonly feeRegistry: "0xD2cF395AD32FadA56f9915b30cF27D38f810FE06";
+    readonly feeRegistryDeployBlock: 62901320;
+    readonly paymentsV2: "0x5915dc4808D0b04588cec96C186C71777F5523b6";
+    readonly paymentsV2DeployBlock: 62901336;
+    readonly recurringV2: "0x5CA68E8dF8409DF35434B35E93fcBc81D9DE7919";
+    readonly recurringV2DeployBlock: 62901346;
+    readonly send: "0xD8705734c5eD8d736879F9BAe588Fb74d63b8235";
+    readonly sendDeployBlock: 62901354;
     readonly explorer: "https://basescan.org";
 };
 /** The chains this protocol is deployed to, by id. */
@@ -99,6 +111,18 @@ export declare const CHAINS: {
         readonly batchVaults: "0xa62eDD9B45a0564a63C248564335BA7B2E3877A4";
         /** P2FluxGasRefill (keeps the relayer in gas from the gas treasury's USDC), 2026-10-01, manifest 48bebefb…2adc (nonce 6). */
         readonly gasRefill: "0x78cb470600EA0D68cE846bfc3bB455786BF56537";
+        /**
+         * Contracts v2, deployed 2026-11-27 by deployer 0x1089f4E0…8B87 (nonces 0-3), Sourcify exact_match,
+         * manifest manifests/base-mainnet-v2.json. Fees live in the registry (48 h delay on every change).
+         */
+        readonly feeRegistry: "0xD2cF395AD32FadA56f9915b30cF27D38f810FE06";
+        readonly feeRegistryDeployBlock: 62901320;
+        readonly paymentsV2: "0x5915dc4808D0b04588cec96C186C71777F5523b6";
+        readonly paymentsV2DeployBlock: 62901336;
+        readonly recurringV2: "0x5CA68E8dF8409DF35434B35E93fcBc81D9DE7919";
+        readonly recurringV2DeployBlock: 62901346;
+        readonly send: "0xD8705734c5eD8d736879F9BAe588Fb74d63b8235";
+        readonly sendDeployBlock: 62901354;
         readonly explorer: "https://basescan.org";
     };
 };
