@@ -9,8 +9,9 @@ import {P2FluxSend} from "../contracts/v2/P2FluxSend.sol";
 
 /// Deploy v2 to Base Sepolia, or Base mainnet with the wallets pinned below: registry first, then payments (self-pay + sponsored in one
 /// contract, one replay table), recurring and send. Four contracts.
-/// Addresses come from the environment (ADMIN, RELAYER, FEE_WALLET, GAS_TREASURY, USDC); the key
-/// from TEST_PRIVATE_KEY (a test-only wallet via `p2flux-testkey run`). Never prints either key.
+/// Addresses come from the environment (ADMIN, RELAYER, FEE_WALLET, GAS_TREASURY, USDC). The key: on
+/// Base Sepolia TEST_PRIVATE_KEY (a test-only wallet via `p2flux-testkey run`), on Base mainnet
+/// DEPLOYER_PK (the v2 deployer key file). Never prints either key.
 ///   p2flux-testkey run v2-sepolia-deployer -- forge script script/DeployV2.s.sol --rpc-url <rpc> --broadcast
 contract DeployV2 is Script {
     uint256 constant MAX_NETWORK_FEE_HARD_CAP = 250_000; // 0.25 USDC, as v1 on Base
